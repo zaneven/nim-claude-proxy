@@ -406,6 +406,9 @@ async def format_anthropic_sse_stream(
                 tool_id = getattr(tc, "id", None)
                 if tool_id:
                     pending_tool_ids[tc_index] = str(tool_id)
+                elif tc_index not in pending_tool_ids:
+                    # NVIDIA NIM/some models may omit the ID; generate one to prevent swallowing the tool block
+                    pending_tool_ids[tc_index] = f"call_nim_{uuid.uuid4().hex[:10]}"
 
                 fn = getattr(tc, "function", None)
                 incoming_name = getattr(fn, "name", None) if fn else None

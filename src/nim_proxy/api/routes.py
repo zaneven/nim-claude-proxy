@@ -191,9 +191,13 @@ async def handle_anthropic_messages(req: MessagesRequest):
                 # 解换 unsafe 别名参数（如 _nim_arg_type -> type）
                 clean_args = unalias_tool_call_arguments(args)
 
+                tc_id = getattr(tc, "id", None)
+                if not tc_id:
+                    tc_id = f"call_nim_{uuid.uuid4().hex[:10]}"
+
                 content_blocks.append({
                     "type": "tool_use",
-                    "id": tc.id,
+                    "id": str(tc_id),
                     "name": tc.function.name,
                     "input": clean_args if isinstance(clean_args, dict) else args,
                 })
