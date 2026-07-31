@@ -1,5 +1,6 @@
 """Route-level tests using FastAPI TestClient with a mocked NimClient (no network)."""
 
+import pytest
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -89,3 +90,53 @@ def test_admin_api_requires_token_when_configured(monkeypatch):
     assert c.get("/admin/api/config").status_code == 401
     # 带 Token -> 200
     assert c.get("/admin/api/config", headers={"Authorization": "Bearer secret-token"}).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_non_stream_thinking(monkeypatch):
+    monkeypatch.setattr(routes_mod.settings, "proxy_api_token", "")
+    
+    async def _exec(body):
+        return SimpleNamespace(
+            choices=[SimpleNamespace(
+                message=SimpleNamespace(
+                    role="assistant",
+                    content="<think>internal thought process</think>final answer",
+                    reasoning_content="native reasoning field",
+                    tool_calls=None,
+                ),
+                finish_reason="stop",
+            )],
+            usage=SimpleNamespace(prompt_tokens=10, completion_tokens=20),
+        )
+    routes_mod._client.execute_chat = _exec
+
+    c = TestClient(app)
+    payload = {
+        "model": "nvidia/nemotron-3-super-120b-a12b",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 100,
+        "stream": False,
+    }
+
+    resp = c.post(
+        "/v1/messages",
+        json=payload,
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    
+    # 验证解析出两个 thinking 块和一个 text 块
+    assert len(data["content"]) == 3
+    
+    # 验证第一个块: 从 reasoning_content 提取的 thinking
+    assert data["content"][0]["type"] == "thinking"
+    assert data["content"][0]["thinking"] == "native reasoning field"
+
+    # 验证第二个块: 从 <think> 提取的 thinking
+    assert data["content"][1]["type"] == "thinking"
+    assert data["content"][1]["thinking"] == "internal thought process"
+
+    # 验证第三个块: 纯文本
+    assert data["content"][2]["type"] == "text"
+    assert data["content"][2]["text"] == "final answer"

@@ -27,7 +27,7 @@ STOP_REASON_MAP = {
 }
 
 
-class _ThinkTagParser:
+class ThinkTagParser:
     """Streaming parser for ``<think>...</think>`` tags embedded in content deltas.
 
     Models like DeepSeek emit reasoning wrapped in think tags. This parser
@@ -341,7 +341,7 @@ async def format_anthropic_sse_stream(
     """
     msg_id = f"msg_{uuid.uuid4().hex[:16]}"
     ledger = _StreamLedger(msg_id, model)
-    think_parser = _ThinkTagParser()
+    think_parser = ThinkTagParser()
 
     # Pending tool call name accumulation (name can arrive across multiple deltas)
     pending_tool_names: dict[int, str] = {}

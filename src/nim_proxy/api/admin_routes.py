@@ -157,7 +157,7 @@ async def save_admin_config(req: ConfigSaveRequest):
         else:
             to_save[k.upper()] = str(v)
 
-    apply_settings_update(to_save, _key_pool)
+    await apply_settings_update(to_save, _key_pool)
 
     return {"status": "success", "message": "Settings updated and saved to .env"}
 

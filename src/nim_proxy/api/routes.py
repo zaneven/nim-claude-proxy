@@ -157,8 +157,29 @@ async def handle_anthropic_messages(req: MessagesRequest):
         msg = choice.message
 
         content_blocks = []
+        
+        # 1. 提取原生 reasoning 字段
+        reasoning = getattr(msg, "reasoning_content", getattr(msg, "reasoning", None))
+        if reasoning:
+            content_blocks.append({"type": "thinking", "thinking": reasoning})
+
+        # 2. 从内容中解析 <think> 标签
         if msg.content:
-            content_blocks.append({"type": "text", "text": msg.content})
+            from nim_proxy.api.sse import ThinkTagParser
+            parser = ThinkTagParser()
+            for chunk_type, content in parser.feed(msg.content):
+                if chunk_type == "thinking":
+                    content_blocks.append({"type": "thinking", "thinking": content})
+                else:
+                    content_blocks.append({"type": "text", "text": content})
+            
+            remaining = parser.flush()
+            if remaining:
+                r_type, r_content = remaining
+                if r_type == "thinking":
+                    content_blocks.append({"type": "thinking", "thinking": r_content})
+                else:
+                    content_blocks.append({"type": "text", "text": r_content})
 
         if getattr(msg, "tool_calls", None):
             for tc in msg.tool_calls:

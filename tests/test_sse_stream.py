@@ -5,7 +5,7 @@ import pytest
 from types import SimpleNamespace
 from nim_proxy.api.sse import (
     format_anthropic_sse_stream,
-    _ThinkTagParser,
+    ThinkTagParser,
     _StreamLedger,
     _sse_event,
 )
@@ -63,18 +63,18 @@ def _parse_sse_events(events: list[str]) -> list[dict]:
 
 class TestThinkTagParser:
     def test_plain_text(self):
-        parser = _ThinkTagParser()
+        parser = ThinkTagParser()
         result = parser.feed("hello world")
         assert result == [("text", "hello world")]
 
     def test_think_tag(self):
-        parser = _ThinkTagParser()
+        parser = ThinkTagParser()
         result = parser.feed("<think>reasoning here</think>visible text")
         assert ("thinking", "reasoning here") in result
         assert ("text", "visible text") in result
 
     def test_streaming_think_tag(self):
-        parser = _ThinkTagParser()
+        parser = ThinkTagParser()
         # Feed tag in parts
         r1 = parser.feed("<think>part1")
         assert ("thinking", "part1") in r1
@@ -84,7 +84,7 @@ class TestThinkTagParser:
         assert ("text", "text") in r2
 
     def test_flush(self):
-        parser = _ThinkTagParser()
+        parser = ThinkTagParser()
         # Feed content that leaves a partial tag in the buffer
         r = parser.feed("<think>start")
         # "start" is already emitted as thinking since no partial close tag

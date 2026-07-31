@@ -5,6 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 
+from nim_proxy import __version__
 from nim_proxy.api.admin_routes import admin_router, init_admin_globals
 from nim_proxy.api.routes import router, _key_pool, _client
 from nim_proxy.config.settings import settings
@@ -19,7 +20,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="NVIDIA NIM Dedicated Proxy",
         description="High-availability local proxy connecting AI coding agents to NVIDIA NIM with Multi-Key failover and Admin UI.",
-        version="0.1.0",
+        version=__version__,
     )
 
     # 1. 跨域 CORS 支持（明确来源，避免使用 "*" + 凭据的危险组合）

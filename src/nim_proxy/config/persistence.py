@@ -48,7 +48,7 @@ def save_settings_to_env(new_values: dict[str, str], env_path: str = ".env") -> 
     return True
 
 
-def apply_settings_update(new_settings_dict: dict[str, str], key_pool: KeyPoolManager | None = None) -> None:
+async def apply_settings_update(new_settings_dict: dict[str, str], key_pool: KeyPoolManager | None = None) -> None:
     """Update global settings instance and hot-reload KeyPoolManager.
 
     HOST / PORT are binding-time only and skipped here (a restart is required);
@@ -86,4 +86,4 @@ def apply_settings_update(new_settings_dict: dict[str, str], key_pool: KeyPoolMa
     if key_pool is not None:
         new_keys = settings.parsed_api_keys()
         if new_keys:
-            key_pool.add_keys(new_keys)
+            await key_pool.add_keys(new_keys)

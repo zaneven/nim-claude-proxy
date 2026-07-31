@@ -31,12 +31,13 @@ class KeyPoolManager:
         self._index = 0
         self._lock = asyncio.Lock()
 
-    def add_keys(self, keys: list[str]) -> None:
-        existing = {k.api_key for k in self._keys}
-        for k in keys:
-            clean = k.strip()
-            if clean and clean not in existing:
-                self._keys.append(KeyStatus(api_key=clean))
+    async def add_keys(self, keys: list[str]) -> None:
+        async with self._lock:
+            existing = {k.api_key for k in self._keys}
+            for k in keys:
+                clean = k.strip()
+                if clean and clean not in existing:
+                    self._keys.append(KeyStatus(api_key=clean))
 
     async def get_next_key(self) -> str:
         """Get next active API key via Round-Robin, bypassing keys in cooldown/disabled state."""

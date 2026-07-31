@@ -116,6 +116,12 @@ def anthropic_request_to_openai_body(req: MessagesRequest) -> dict[str, Any]:
                 
                 if b_type == "text":
                     text_parts.append(block.text if hasattr(block, "text") else block["text"])
+                elif b_type == "thinking":
+                    thinking_content = block.thinking if hasattr(block, "thinking") else block.get("thinking", "")
+                    if thinking_content:
+                        text_parts.append(f"<think>\n{thinking_content}\n</think>")
+                elif b_type == "redacted_thinking":
+                    pass  # Ignore opaque continuation data
                 elif b_type == "tool_use":
                     b_id = block.id if hasattr(block, "id") else block["id"]
                     b_name = block.name if hasattr(block, "name") else block["name"]
