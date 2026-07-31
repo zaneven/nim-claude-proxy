@@ -32,8 +32,9 @@ class NimClient:
     async def execute_chat(self, body: dict[str, Any]) -> Any:
         """Execute non-streaming or streaming Chat Completion with Multi-Key Failover."""
         # 清洗 tools 定义
-        if "tools" in body:
-            body["tools"] = sanitize_nim_tools(body["tools"])
+        if "tools" in body and isinstance(body["tools"], list):
+            sanitized_tools, _ = sanitize_nim_tools(body["tools"])
+            body["tools"] = sanitized_tools
 
         stats = self.key_pool.get_stats()
         max_attempts = max(1, stats["active"] + stats["cooldown"])

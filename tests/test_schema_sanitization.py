@@ -48,3 +48,44 @@ def test_unalias_tool_call_arguments():
     assert restored["type"] == "python"
     assert restored["content"] == "print('hello')"
     assert "_nim_arg_type" not in restored
+
+
+import pytest
+from unittest.mock import AsyncMock, patch
+from nim_proxy.provider.client import NimClient
+from nim_proxy.provider.key_pool import KeyPoolManager
+
+
+@pytest.mark.asyncio
+async def test_client_execute_chat_keeps_tools_as_list():
+    key_pool = KeyPoolManager(["nvapi-testkey"])
+    client = NimClient(key_pool)
+
+    raw_body = {
+        "model": "test-model",
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "test_func",
+                    "parameters": {"type": "object", "properties": {"a": {"type": "string"}}}
+                }
+            }
+        ]
+    }
+
+    mock_chat = AsyncMock()
+    mock_chat.completions.create = AsyncMock(return_value=AsyncMock(choices=[]))
+
+    with patch.object(client, "_get_async_client") as mock_get_client:
+        mock_openai_client = AsyncMock()
+        mock_openai_client.chat = mock_chat
+        mock_get_client.return_value = mock_openai_client
+
+        await client.execute_chat(raw_body)
+
+        create_kwargs = mock_chat.completions.create.call_args.kwargs
+        assert isinstance(create_kwargs["tools"], list)
+        assert not isinstance(create_kwargs["tools"], tuple)
+

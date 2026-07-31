@@ -37,7 +37,26 @@ class ContentBlockToolResult(BaseModel):
     is_error: bool = False
 
 
-ContentBlock = ContentBlockText | ContentBlockImage | ContentBlockToolUse | ContentBlockToolResult
+class ContentBlockThinking(BaseModel):
+    type: Literal["thinking"] = "thinking"
+    thinking: str | None = None
+    signature: str | None = None
+
+
+class ContentBlockRedactedThinking(BaseModel):
+    type: Literal["redacted_thinking"] = "redacted_thinking"
+    data: str | None = None
+
+
+ContentBlock = (
+    ContentBlockText
+    | ContentBlockImage
+    | ContentBlockToolUse
+    | ContentBlockToolResult
+    | ContentBlockThinking
+    | ContentBlockRedactedThinking
+    | dict[str, Any]
+)
 
 
 class Message(BaseModel):
