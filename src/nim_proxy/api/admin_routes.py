@@ -123,7 +123,8 @@ async def discover_nim_models():
 
     try:
         api_key = await _key_pool.get_next_key()
-    except Exception:
+    except Exception as exc:
+        logger.debug(f"Failed to get next key for model discovery: {exc}")
         return {"models": FALLBACK_NIM_MODELS, "source": "fallback"}
 
     headers = {

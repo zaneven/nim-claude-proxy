@@ -24,7 +24,8 @@ def _parse_args(raw: str | None) -> dict[str, Any]:
     try:
         parsed = json.loads(raw)
         return parsed if isinstance(parsed, dict) else {}
-    except Exception:
+    except Exception as exc:
+        logger.debug(f"Failed to parse tool call arguments: {exc}")
         return {}
 
 

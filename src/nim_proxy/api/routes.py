@@ -44,8 +44,8 @@ async def _fetch_online_models() -> list[str]:
             if resp.status_code == 200:
                 online_models = resp.json().get("data", [])
                 return [m.get("id") for m in online_models if isinstance(m, dict) and m.get("id")]
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug(f"Failed to fetch online models: {exc}")
     return []
 
 

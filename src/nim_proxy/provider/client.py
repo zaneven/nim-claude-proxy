@@ -57,7 +57,9 @@ class NimClient:
             body["tools"] = sanitized_tools
 
         stats = self.key_pool.get_stats()
-        max_attempts = max(1, stats["active"] + stats["cooldown"])
+        # 至少重试 5 次（对齐原项目的 UPSTREAM_TRANSIENT_TOTAL_ATTEMPTS）
+        # 如果 Key 特别多（比如 10 个），则保证能尝试完所有 Key 并至少循环两轮
+        max_attempts = max(5, stats["total"] * 2)
 
         last_exception = None
 
