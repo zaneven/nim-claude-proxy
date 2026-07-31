@@ -1,0 +1,1096 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NIM Proxy Admin Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-primary: #090D16;
+      --bg-secondary: #111827;
+      --bg-card: rgba(31, 41, 55, 0.6);
+      --bg-card-hover: rgba(45, 55, 72, 0.7);
+      --accent: #10B981;
+      --accent-glow: rgba(16, 185, 129, 0.25);
+      --accent-hover: #059669;
+      --text-main: #F9FAFB;
+      --text-muted: #9CA3AF;
+      --border-color: rgba(255, 255, 255, 0.08);
+      --danger: #EF4444;
+      --warning: #F59E0B;
+      --info: #3B82F6;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+      background-color: var(--bg-primary);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      background-image: 
+        radial-gradient(circle at 15% 15%, rgba(16, 185, 129, 0.08) 0%, transparent 40%),
+        radial-gradient(circle at 85% 85%, rgba(59, 130, 246, 0.05) 0%, transparent 40%);
+    }
+
+    /* Top Navbar */
+    .navbar {
+      height: 70px;
+      border-bottom: 1px solid var(--border-color);
+      background: rgba(17, 24, 39, 0.8);
+      backdrop-filter: blur(12px);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 2rem;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 700;
+      font-size: 1.25rem;
+      letter-spacing: -0.5px;
+    }
+
+    .brand-icon {
+      width: 36px;
+      height: 36px;
+      background: linear-gradient(135deg, var(--accent), #047857);
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 15px var(--accent-glow);
+    }
+
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(16, 185, 129, 0.1);
+      border: 1px solid rgba(16, 185, 129, 0.2);
+      color: var(--accent);
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 0.85rem;
+      font-weight: 500;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      background: var(--accent);
+      border-radius: 50%;
+      box-shadow: 0 0 8px var(--accent);
+      animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    /* Navigation Tabs */
+    .nav-tabs {
+      display: flex;
+      gap: 8px;
+    }
+
+    .nav-tab {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.2s ease;
+    }
+
+    .nav-tab:hover {
+      color: var(--text-main);
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .nav-tab.active {
+      color: var(--text-main);
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
+    /* Main Layout */
+    .main-container {
+      max-width: 1200px;
+      width: 100%;
+      margin: 2rem auto;
+      padding: 0 1.5rem;
+      flex: 1;
+    }
+
+    .tab-content {
+      display: none;
+    }
+
+    .tab-content.active {
+      display: block;
+      animation: fadeIn 0.3s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Cards Grid */
+    .grid-4 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 1.25rem;
+      margin-bottom: 2rem;
+    }
+
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 1.5rem;
+      backdrop-filter: blur(10px);
+      transition: all 0.25s ease;
+    }
+
+    .card:hover {
+      border-color: rgba(255, 255, 255, 0.15);
+      transform: translateY(-2px);
+    }
+
+    .stat-card {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .stat-value {
+      font-size: 2rem;
+      font-weight: 700;
+      margin-top: 4px;
+      letter-spacing: -1px;
+    }
+
+    .stat-label {
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      font-weight: 500;
+    }
+
+    .stat-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    /* Table styling */
+    .table-container {
+      overflow-x: auto;
+      border-radius: 12px;
+      border: 1px solid var(--border-color);
+      background: rgba(17, 24, 39, 0.4);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 0.9rem;
+    }
+
+    th {
+      background: rgba(31, 41, 55, 0.8);
+      padding: 14px 18px;
+      color: var(--text-muted);
+      font-weight: 600;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    td {
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border-color);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 4px 10px;
+      border-radius: 12px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      font-family: 'Outfit', sans-serif;
+    }
+
+    .badge-success { background: rgba(16, 185, 129, 0.15); color: #34D399; }
+    .badge-warning { background: rgba(245, 158, 11, 0.15); color: #FBBF24; }
+    .badge-danger { background: rgba(239, 68, 68, 0.15); color: #F87171; }
+
+    /* Form Styles */
+    .form-group {
+      margin-bottom: 1.25rem;
+    }
+
+    .form-label-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+
+    .form-label {
+      font-size: 0.88rem;
+      font-weight: 500;
+      color: var(--text-main);
+    }
+
+    .btn-link-action {
+      background: transparent;
+      border: none;
+      color: var(--accent);
+      font-size: 0.78rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      transition: background 0.2s;
+    }
+
+    .btn-link-action:hover {
+      background: rgba(16, 185, 129, 0.15);
+    }
+
+    .form-desc {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+
+    .form-control {
+      width: 100%;
+      padding: 10px 14px;
+      background: rgba(17, 24, 39, 0.8);
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      color: var(--text-main);
+      font-family: 'Outfit', sans-serif;
+      font-size: 0.95rem;
+      transition: all 0.2s ease;
+    }
+
+    .form-control:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+
+    textarea.form-control {
+      min-height: 100px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 20px;
+      border-radius: 10px;
+      font-weight: 600;
+      font-size: 0.9rem;
+      cursor: pointer;
+      border: none;
+      transition: all 0.2s ease;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #000;
+    }
+
+    .btn-primary:hover {
+      background: var(--accent-hover);
+      box-shadow: 0 0 15px var(--accent-glow);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.1);
+      color: var(--text-main);
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.18);
+    }
+
+    /* Output Console */
+    .console-output {
+      background: #040711;
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 1rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+      min-height: 140px;
+      max-height: 300px;
+      overflow-y: auto;
+      color: #34D399;
+      white-space: pre-wrap;
+    }
+
+    /* Toast Notification */
+    .toast {
+      position: fixed;
+      bottom: 2rem;
+      right: 2rem;
+      background: rgba(17, 24, 39, 0.95);
+      border: 1px solid var(--accent);
+      color: var(--text-main);
+      padding: 12px 20px;
+      border-radius: 10px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      z-index: 1000;
+      transform: translateY(100px);
+      opacity: 0;
+      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .toast.show {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 全局可搜索数据源 -->
+  <datalist id="nim-models-list">
+    <!-- Populated via API -->
+  </datalist>
+
+  <!-- Top Navbar -->
+  <header class="navbar">
+    <div class="brand">
+      <div class="brand-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#000" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+        </svg>
+      </div>
+      <span>NIM Proxy Admin</span>
+    </div>
+
+    <!-- Navigation Tabs -->
+    <nav class="nav-tabs">
+      <button class="nav-tab active" onclick="switchTab('dashboard')">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/>
+          <rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/>
+        </svg>
+        Dashboard
+      </button>
+      <button class="nav-tab" onclick="switchTab('keys')">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>
+        </svg>
+        NIM & Keys
+      </button>
+      <button class="nav-tab" onclick="switchTab('routing')">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M6 9v12"/>
+        </svg>
+        Model Routing & Reasoning
+      </button>
+      <button class="nav-tab" onclick="switchTab('webtools')">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>
+          <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+        </svg>
+        Web Tools
+      </button>
+      <button class="nav-tab" onclick="switchTab('server')">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
+          <line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>
+        </svg>
+        Server Security
+      </button>
+      <button class="nav-tab" onclick="switchTab('playground')">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="5 3 19 12 5 21 5 3"/>
+        </svg>
+        Playground
+      </button>
+    </nav>
+
+    <div class="status-badge">
+      <div class="status-dot"></div>
+      <span>Service Active</span>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="main-container">
+
+    <!-- Tab 1: Dashboard -->
+    <div id="tab-dashboard" class="tab-content active">
+      <div class="grid-4">
+        <div class="card stat-card">
+          <div>
+            <div class="stat-label">Total NIM Keys</div>
+            <div class="stat-value" id="stat-total">0</div>
+          </div>
+          <div class="stat-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2">
+              <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>
+            </svg>
+          </div>
+        </div>
+
+        <div class="card stat-card">
+          <div>
+            <div class="stat-label">Active / Ready</div>
+            <div class="stat-value" style="color: #34D399;" id="stat-active">0</div>
+          </div>
+          <div class="stat-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#34D399" stroke-width="2">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
+          </div>
+        </div>
+
+        <div class="card stat-card">
+          <div>
+            <div class="stat-label">Cooldown Isolation</div>
+            <div class="stat-value" style="color: #FBBF24;" id="stat-cooldown">0</div>
+          </div>
+          <div class="stat-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#FBBF24" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+            </svg>
+          </div>
+        </div>
+
+        <div class="card stat-card">
+          <div>
+            <div class="stat-label">Disabled (401)</div>
+            <div class="stat-value" style="color: #F87171;" id="stat-disabled">0</div>
+          </div>
+          <div class="stat-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#F87171" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+          <div>
+            <h3 style="font-size: 1.1rem; font-weight: 600;">KeyPool Realtime Status</h3>
+            <p style="color: var(--text-muted); font-size: 0.85rem;">Round-Robin key status and failover tracking</p>
+          </div>
+          <button class="btn btn-secondary" onclick="resetKeyPool()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+            </svg>
+            Reset Cooldowns
+          </button>
+        </div>
+
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>Key Mask</th>
+                <th>Status</th>
+                <th>Failures</th>
+                <th>Cooldown Remaining</th>
+              </tr>
+            </thead>
+            <tbody id="key-table-body">
+              <!-- Loaded via JavaScript -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab 2: NIM & Keys -->
+    <div id="tab-keys" class="tab-content">
+      <div class="card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+          <h3 style="font-size: 1.1rem; font-weight: 600;">NVIDIA NIM & Multi-Key Configuration</h3>
+          <button class="btn btn-secondary" onclick="loadConfig(true)">Discard / Reload Form</button>
+        </div>
+        
+        <div class="form-group">
+          <label class="form-label">NVIDIA NIM API Keys</label>
+          <div class="form-desc">Multiple keys separated by commas. Requests will automatically round-robin and failover.</div>
+          <textarea id="cfg-keys" class="form-control" placeholder="nvapi-key1, nvapi-key2, nvapi-key3"></textarea>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">NVIDIA NIM Base URL</label>
+          <div class="form-desc">Upstream NIM microservice API URL.</div>
+          <input type="text" id="cfg-base-url" class="form-control" placeholder="https://integrate.api.nvidia.com/v1">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Key Cooldown Seconds</label>
+          <div class="form-desc">Isolation time for a Key after receiving 429 Rate Limit or 5xx Server Error.</div>
+          <input type="number" id="cfg-cooldown" class="form-control" placeholder="60">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">SOCKS5 / HTTP Proxy (Optional)</label>
+          <div class="form-desc">Proxy URL for accessing internal NIM nodes.</div>
+          <input type="text" id="cfg-nim-proxy" class="form-control" placeholder="http://127.0.0.1:7890">
+        </div>
+
+        <button class="btn btn-primary" onclick="saveConfig()">Save Changes</button>
+      </div>
+    </div>
+
+    <!-- Tab 3: Routing -->
+    <div id="tab-routing" class="tab-content">
+      <div class="card">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+          <div>
+            <h3 style="font-size: 1.1rem; font-weight: 600;">Model Aliases & Route-Specific Reasoning</h3>
+            <p style="color: var(--text-muted); font-size: 0.85rem;">Type to search models and customize route-specific reasoning overrides</p>
+          </div>
+          <div style="display: flex; gap: 8px;">
+            <button class="btn btn-secondary" onclick="fillAllFromDefault()">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+                <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
+              </svg>
+              Set All to Default
+            </button>
+            <button class="btn btn-secondary" onclick="fetchModels(true)">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21.5 2v6h-6M2.13 15.57a10 10 0 1 0 .57-8.38l-2.7 2.81"/>
+              </svg>
+              Fetch / Discover NIM Models
+            </button>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Default NIM Model</label>
+          <div class="form-desc">Fallback model for requests without explicit model routing. Type to search discovered NIM models.</div>
+          <input type="text" id="cfg-default-model" list="nim-models-list" class="form-control" placeholder="nvidia/nemotron-3-super-120b-a12b">
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+          <div class="form-group">
+            <div class="form-label-header">
+              <span class="form-label">Sonnet Target & Reasoning</span>
+              <button class="btn-link-action" onclick="fillFromDefault('cfg-model-sonnet')">Use Default</button>
+            </div>
+            <input type="text" id="cfg-model-sonnet" list="nim-models-list" class="form-control" placeholder="meta/llama-3.3-70b-instruct" style="margin-bottom: 6px;">
+            <select id="cfg-reasoning-sonnet" class="form-control" style="font-size: 0.82rem;">
+              <option value="inherit">Reasoning: Inherit Global</option>
+              <option value="client">Reasoning: From Client</option>
+              <option value="off">Reasoning: Off</option>
+              <option value="low">Reasoning: Low (512)</option>
+              <option value="medium">Reasoning: Medium (1024)</option>
+              <option value="high">Reasoning: High (2048)</option>
+              <option value="xhigh">Reasoning: X-High (4096)</option>
+              <option value="max">Reasoning: Max (8192)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <div class="form-label-header">
+              <span class="form-label">Opus Target & Reasoning</span>
+              <button class="btn-link-action" onclick="fillFromDefault('cfg-model-opus')">Use Default</button>
+            </div>
+            <input type="text" id="cfg-model-opus" list="nim-models-list" class="form-control" placeholder="nvidia/nemotron-4-340b-instruct" style="margin-bottom: 6px;">
+            <select id="cfg-reasoning-opus" class="form-control" style="font-size: 0.82rem;">
+              <option value="inherit">Reasoning: Inherit Global</option>
+              <option value="client">Reasoning: From Client</option>
+              <option value="off">Reasoning: Off</option>
+              <option value="low">Reasoning: Low (512)</option>
+              <option value="medium">Reasoning: Medium (1024)</option>
+              <option value="high">Reasoning: High (2048)</option>
+              <option value="xhigh">Reasoning: X-High (4096)</option>
+              <option value="max">Reasoning: Max (8192)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <div class="form-label-header">
+              <span class="form-label">Haiku Target & Reasoning</span>
+              <button class="btn-link-action" onclick="fillFromDefault('cfg-model-haiku')">Use Default</button>
+            </div>
+            <input type="text" id="cfg-model-haiku" list="nim-models-list" class="form-control" placeholder="mistralai/mistral-7b-instruct-v0.3" style="margin-bottom: 6px;">
+            <select id="cfg-reasoning-haiku" class="form-control" style="font-size: 0.82rem;">
+              <option value="inherit">Reasoning: Inherit Global</option>
+              <option value="client">Reasoning: From Client</option>
+              <option value="off">Reasoning: Off</option>
+              <option value="low">Reasoning: Low (512)</option>
+              <option value="medium">Reasoning: Medium (1024)</option>
+              <option value="high">Reasoning: High (2048)</option>
+              <option value="xhigh">Reasoning: X-High (4096)</option>
+              <option value="max">Reasoning: Max (8192)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <div class="form-label-header">
+              <span class="form-label">Fable Target & Reasoning</span>
+              <button class="btn-link-action" onclick="fillFromDefault('cfg-model-fable')">Use Default</button>
+            </div>
+            <input type="text" id="cfg-model-fable" list="nim-models-list" class="form-control" placeholder="" style="margin-bottom: 6px;">
+            <select id="cfg-reasoning-fable" class="form-control" style="font-size: 0.82rem;">
+              <option value="inherit">Reasoning: Inherit Global</option>
+              <option value="client">Reasoning: From Client</option>
+              <option value="off">Reasoning: Off</option>
+              <option value="low">Reasoning: Low (512)</option>
+              <option value="medium">Reasoning: Medium (1024)</option>
+              <option value="high">Reasoning: High (2048)</option>
+              <option value="xhigh">Reasoning: X-High (4096)</option>
+              <option value="max">Reasoning: Max (8192)</option>
+            </select>
+          </div>
+        </div>
+
+        <hr style="border: none; border-top: 1px solid var(--border-color); margin: 1.5rem 0;">
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+          <div class="form-group">
+            <label class="form-label">Global Reasoning Preference</label>
+            <select id="cfg-reasoning-pref" class="form-control">
+              <option value="client">From Client (Respect Client Thinking)</option>
+              <option value="off">Off (Disable Reasoning)</option>
+              <option value="low">Low (512 Tokens)</option>
+              <option value="medium">Medium (1024 Tokens)</option>
+              <option value="high">High (2048 Tokens)</option>
+              <option value="xhigh">X-High (4096 Tokens)</option>
+              <option value="max">Max (8192 Tokens)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Default Reasoning Budget (Tokens)</label>
+            <input type="number" id="cfg-reasoning-budget" class="form-control" placeholder="4096">
+          </div>
+        </div>
+
+        <button class="btn btn-primary" onclick="saveConfig()">Save Changes</button>
+      </div>
+    </div>
+
+    <!-- Tab 4: Web Tools -->
+    <div id="tab-webtools" class="tab-content">
+      <div class="card">
+        <h3 style="font-size: 1.1rem; font-weight: 600; margin-bottom: 1rem;">Local Web Tools Interception</h3>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+          <div class="form-group">
+            <label class="form-label">Enable Local web_search Interception</label>
+            <select id="cfg-web-search" class="form-control">
+              <option value="true">Enabled (Intercept and run Web Search)</option>
+              <option value="false">Disabled</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Enable Local web_fetch Interception</label>
+            <select id="cfg-web-fetch" class="form-control">
+              <option value="true">Enabled (Intercept and fetch clean webpage text)</option>
+              <option value="false">Disabled</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+          <div class="form-group">
+            <label class="form-label">Web Search Provider</label>
+            <select id="cfg-search-provider" class="form-control">
+              <option value="duckduckgo">DuckDuckGo (Free / No Key Required)</option>
+              <option value="tavily">Tavily Search API</option>
+              <option value="doubao">豆包搜索 (Doubao Search)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Search Max Results</label>
+            <input type="number" id="cfg-ddg-max" class="form-control" placeholder="5">
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+          <div class="form-group">
+            <label class="form-label">Tavily API Key (Optional)</label>
+            <div class="form-desc">Required if Provider is set to Tavily.</div>
+            <input type="password" id="cfg-tavily-key" class="form-control" placeholder="tvly-...">
+          </div>
+          <div class="form-group">
+            <label class="form-label">豆包搜索 API Key (Optional)</label>
+            <div class="form-desc">Required if Provider is set to Doubao.</div>
+            <input type="password" id="cfg-doubao-key" class="form-control" placeholder="Volcengine / Doubao API Key">
+          </div>
+        </div>
+
+        <button class="btn btn-primary" onclick="saveConfig()">Save Changes</button>
+      </div>
+    </div>
+
+    <!-- Tab 5: Server Security -->
+    <div id="tab-server" class="tab-content">
+      <div class="card">
+        <h3 style="font-size: 1.1rem; font-weight: 600; margin-bottom: 1rem;">Server & Security Options</h3>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+          <div class="form-group">
+            <label class="form-label">Port</label>
+            <input type="number" id="cfg-port" class="form-control" placeholder="8000">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Host Binding</label>
+            <input type="text" id="cfg-host" class="form-control" placeholder="0.0.0.0">
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Proxy Access Token (Optional)</label>
+          <div class="form-desc">Require Bearer Token from client requests to access proxy.</div>
+          <input type="text" id="cfg-proxy-token" class="form-control" placeholder="Optional Auth Token">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">HTTP Timeout (Seconds)</label>
+          <input type="number" id="cfg-timeout" class="form-control" placeholder="120.0">
+        </div>
+
+        <button class="btn btn-primary" onclick="saveConfig()">Save Changes</button>
+      </div>
+    </div>
+
+    <!-- Tab 6: Playground -->
+    <div id="tab-playground" class="tab-content">
+      <div class="card">
+        <h3 style="font-size: 1.1rem; font-weight: 600; margin-bottom: 1rem;">Interactive Playground Test</h3>
+        
+        <div class="form-group">
+          <label class="form-label">Test Prompt</label>
+          <input type="text" id="play-prompt" class="form-control" value="Hello NVIDIA NIM Proxy! Please answer in 1 sentence.">
+        </div>
+
+        <div class="form-group">
+          <div class="form-label-header">
+            <span class="form-label">Target Model (Searchable)</span>
+            <button class="btn-link-action" onclick="fillFromDefault('play-model')">Use Default</button>
+          </div>
+          <input type="text" id="play-model" list="nim-models-list" class="form-control" value="nvidia/nemotron-3-super-120b-a12b" placeholder="nvidia/nemotron-3-super-120b-a12b">
+        </div>
+
+        <button class="btn btn-primary" style="margin-bottom: 1rem;" onclick="runTestChat()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="5 3 19 12 5 21 5 3"/>
+          </svg>
+          Send Test Request
+        </button>
+
+        <div class="form-label">Response Output</div>
+        <div id="play-output" class="console-output">Console output will appear here...</div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Toast Notification -->
+  <div id="toast" class="toast">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2">
+      <polyline points="20 6 9 17 4 12"/>
+    </svg>
+    <span id="toast-msg">Settings saved successfully</span>
+  </div>
+
+  <script>
+    function switchTab(tabId) {
+      document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      
+      event.currentTarget.classList.add('active');
+      document.getElementById('tab-' + tabId).classList.add('active');
+    }
+
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      document.getElementById('toast-msg').innerText = msg;
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 3000);
+    }
+
+    function fillFromDefault(targetId) {
+      const defaultModel = document.getElementById('cfg-default-model').value.trim();
+      if (!defaultModel) {
+        showToast('Default NIM Model is currently empty');
+        return;
+      }
+      const targetEl = document.getElementById(targetId);
+      if (targetEl) {
+        targetEl.value = defaultModel;
+        showToast('Filled model from Default');
+      }
+    }
+
+    function fillAllFromDefault() {
+      const defaultModel = document.getElementById('cfg-default-model').value.trim();
+      if (!defaultModel) {
+        showToast('Default NIM Model is currently empty');
+        return;
+      }
+      ['cfg-model-sonnet', 'cfg-model-opus', 'cfg-model-haiku', 'cfg-model-fable', 'play-model'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = defaultModel;
+      });
+      showToast('Set all alias targets to Default Model');
+    }
+
+    function getApiToken() {
+      const field = document.getElementById('cfg-proxy-token');
+      const fromField = field && field.value ? field.value.trim() : '';
+      return fromField || (localStorage.getItem('nim_proxy_token') || '');
+    }
+
+    async function apiFetch(url, options = {}) {
+      const token = getApiToken();
+      const headers = Object.assign({}, options.headers || {});
+      if (token && !headers['Authorization']) {
+        headers['Authorization'] = 'Bearer ' + token;
+      }
+      const opts = Object.assign({}, options, { headers });
+      const res = await fetch(url, opts);
+      if (res.status === 401) {
+        showToast('控制台已启用鉴权，请先在 Token 栏填入 PROXY_API_TOKEN');
+      }
+      return res;
+    }
+
+    async function fetchModels(notify = false) {
+      try {
+        const res = await apiFetch('/admin/api/models');
+        const data = await res.json();
+        const models = data.models || [];
+        
+        const datalist = document.getElementById('nim-models-list');
+        datalist.innerHTML = '';
+
+        models.forEach(m => {
+          const opt = document.createElement('option');
+          opt.value = m;
+          datalist.appendChild(opt);
+        });
+
+        if (notify) {
+          showToast(`Fetched ${models.length} models (${data.source})`);
+        }
+      } catch (err) {
+        console.error('Failed to fetch models:', err);
+      }
+    }
+
+    async function loadConfig(fillForms = false) {
+      try {
+        const res = await apiFetch('/admin/api/config');
+        if (res.status === 401) return;
+        const data = await res.json();
+        
+        const stats = data.key_pool_stats || {};
+        document.getElementById('stat-total').innerText = stats.total || 0;
+        document.getElementById('stat-active').innerText = stats.active || 0;
+        document.getElementById('stat-cooldown').innerText = stats.cooldown || 0;
+        document.getElementById('stat-disabled').innerText = stats.disabled || 0;
+
+        const tbody = document.getElementById('key-table-body');
+        tbody.innerHTML = '';
+        const now = Date.now() / 1000;
+
+        (data.key_details || []).forEach(k => {
+          let badge = '<span class="badge badge-success">Healthy / Active</span>';
+          let cdText = '-';
+
+          if (k.is_disabled) {
+            badge = '<span class="badge badge-danger">Disabled (401)</span>';
+          } else if (k.cooldown_until > now) {
+            badge = '<span class="badge badge-warning">Cooldown</span>';
+            cdText = Math.ceil(k.cooldown_until - now) + 's';
+          }
+
+          tbody.innerHTML += `
+            <tr>
+              <td>${k.key}</td>
+              <td>${badge}</td>
+              <td>${k.failure_count}</td>
+              <td>${cdText}</td>
+            </tr>
+          `;
+        });
+
+        if (fillForms) {
+          const s = data.settings || {};
+          document.getElementById('cfg-keys').value = s.NVIDIA_NIM_API_KEYS || '';
+          document.getElementById('cfg-base-url').value = s.NVIDIA_NIM_BASE_URL || '';
+          document.getElementById('cfg-cooldown').value = s.KEY_COOLDOWN_SECONDS || 60;
+          document.getElementById('cfg-nim-proxy').value = s.NVIDIA_NIM_PROXY || '';
+          
+          document.getElementById('cfg-default-model').value = s.NIM_DEFAULT_MODEL || '';
+          document.getElementById('cfg-model-sonnet').value = s.MODEL_SONNET || '';
+          document.getElementById('cfg-model-opus').value = s.MODEL_OPUS || '';
+          document.getElementById('cfg-model-haiku').value = s.MODEL_HAIKU || '';
+          document.getElementById('cfg-model-fable').value = s.MODEL_FABLE || '';
+
+          document.getElementById('cfg-reasoning-pref').value = s.REASONING_PREFERENCE || 'client';
+          document.getElementById('cfg-reasoning-sonnet').value = s.REASONING_SONNET || 'inherit';
+          document.getElementById('cfg-reasoning-opus').value = s.REASONING_OPUS || 'inherit';
+          document.getElementById('cfg-reasoning-haiku').value = s.REASONING_HAIKU || 'inherit';
+          document.getElementById('cfg-reasoning-fable').value = s.REASONING_FABLE || 'inherit';
+          document.getElementById('cfg-reasoning-budget').value = s.DEFAULT_REASONING_BUDGET || 4096;
+
+          document.getElementById('cfg-web-search').value = s.ENABLE_WEB_SEARCH ? 'true' : 'false';
+          document.getElementById('cfg-web-fetch').value = s.ENABLE_WEB_FETCH ? 'true' : 'false';
+          document.getElementById('cfg-search-provider').value = s.WEB_SEARCH_PROVIDER || 'duckduckgo';
+          document.getElementById('cfg-ddg-max').value = s.DUCKDUCKGO_MAX_RESULTS || 5;
+          document.getElementById('cfg-tavily-key').value = s.TAVILY_API_KEY || '';
+          document.getElementById('cfg-doubao-key').value = s.DOUBAO_SEARCH_API_KEY || '';
+
+          document.getElementById('cfg-port').value = s.PORT || 8000;
+          document.getElementById('cfg-host').value = s.HOST || '0.0.0.0';
+          document.getElementById('cfg-proxy-token').value = s.PROXY_API_TOKEN || '';
+          document.getElementById('cfg-timeout').value = s.HTTP_TIMEOUT || 120.0;
+
+          if (s.NIM_DEFAULT_MODEL) {
+            document.getElementById('play-model').value = s.NIM_DEFAULT_MODEL;
+          }
+        }
+
+      } catch (err) {
+        console.error('Failed to load config:', err);
+      }
+    }
+
+    async function saveConfig() {
+      const payload = {
+        nvidia_nim_api_keys: document.getElementById('cfg-keys').value,
+        nvidia_nim_base_url: document.getElementById('cfg-base-url').value,
+        key_cooldown_seconds: parseFloat(document.getElementById('cfg-cooldown').value),
+        nvidia_nim_proxy: document.getElementById('cfg-nim-proxy').value,
+        nim_default_model: document.getElementById('cfg-default-model').value,
+        model_sonnet: document.getElementById('cfg-model-sonnet').value,
+        model_opus: document.getElementById('cfg-model-opus').value,
+        model_haiku: document.getElementById('cfg-model-haiku').value,
+        model_fable: document.getElementById('cfg-model-fable').value,
+        reasoning_preference: document.getElementById('cfg-reasoning-pref').value,
+        reasoning_sonnet: document.getElementById('cfg-reasoning-sonnet').value,
+        reasoning_opus: document.getElementById('cfg-reasoning-opus').value,
+        reasoning_haiku: document.getElementById('cfg-reasoning-haiku').value,
+        reasoning_fable: document.getElementById('cfg-reasoning-fable').value,
+        default_reasoning_budget: parseInt(document.getElementById('cfg-reasoning-budget').value),
+        enable_web_search: document.getElementById('cfg-web-search').value === 'true',
+        enable_web_fetch: document.getElementById('cfg-web-fetch').value === 'true',
+        web_search_provider: document.getElementById('cfg-search-provider').value,
+        duckduckgo_max_results: parseInt(document.getElementById('cfg-ddg-max').value),
+        tavily_api_key: document.getElementById('cfg-tavily-key').value,
+        doubao_search_api_key: document.getElementById('cfg-doubao-key').value,
+        port: parseInt(document.getElementById('cfg-port').value),
+        host: document.getElementById('cfg-host').value,
+        proxy_api_token: document.getElementById('cfg-proxy-token').value,
+        http_timeout: parseFloat(document.getElementById('cfg-timeout').value),
+      };
+
+      localStorage.setItem('nim_proxy_token', payload.proxy_api_token || '');
+      const res = await apiFetch('/admin/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.status === 401) return;
+      const data = await res.json();
+      showToast(data.message || 'Settings updated successfully');
+      loadConfig(false);
+      fetchModels();
+    }
+
+    async function resetKeyPool() {
+      const res = await apiFetch('/admin/api/keypool/reset', { method: 'POST' });
+      if (res.status === 401) return;
+      const data = await res.json();
+      showToast(data.message);
+      loadConfig(false);
+    }
+
+    async function runTestChat() {
+      const prompt = document.getElementById('play-prompt').value;
+      const model = document.getElementById('play-model').value;
+      const out = document.getElementById('play-output');
+
+      out.innerText = 'Sending test request to NVIDIA NIM...';
+
+      try {
+        const res = await apiFetch('/admin/api/test_chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt, model })
+        });
+        if (res.status === 401) return;
+        const data = await res.json();
+        if (data.status === 'success') {
+          out.innerText = `[SUCCESS] (${data.model_used}):\n${data.response}`;
+        } else {
+          out.innerText = `[ERROR]: ${data.message}`;
+        }
+      } catch (err) {
+        out.innerText = `[NETWORK ERROR]: ${err}`;
+      }
+    }
+
+    const tokEl = document.getElementById('cfg-proxy-token');
+    if (tokEl) {
+      const saved = localStorage.getItem('nim_proxy_token');
+      if (saved && !tokEl.value) tokEl.value = saved;
+      tokEl.addEventListener('input', e => localStorage.setItem('nim_proxy_token', e.target.value.trim()));
+    }
+
+    loadConfig(true);
+    fetchModels();
+    setInterval(() => loadConfig(false), 5000);
+  </script>
+</body>
+</html>
