@@ -35,6 +35,10 @@ class Settings(BaseSettings):
         default=60.0,
         validation_alias="KEY_COOLDOWN_SECONDS",
     )
+    rate_limit_rpm: int = Field(
+        default=0,
+        validation_alias="RATE_LIMIT_RPM",
+    )
 
     # 模型路由与别名映射
     nim_default_model: str = Field(

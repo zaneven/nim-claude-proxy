@@ -58,6 +58,7 @@ class ConfigSaveRequest(BaseModel):
     proxy_api_token: str | None = None
     http_timeout: float | None = None
     log_level: str | None = None
+    rate_limit_rpm: int | None = None
 
 
 class TestChatRequest(BaseModel):
@@ -99,6 +100,7 @@ async def get_admin_config():
             "REASONING_HAIKU": settings.reasoning_haiku,
             "REASONING_FABLE": settings.reasoning_fable,
             "DEFAULT_REASONING_BUDGET": settings.default_reasoning_budget,
+            "RATE_LIMIT_RPM": settings.rate_limit_rpm,
             "ENABLE_WEB_SEARCH": settings.enable_web_search,
             "ENABLE_WEB_FETCH": settings.enable_web_fetch,
             "WEB_SEARCH_PROVIDER": settings.web_search_provider,

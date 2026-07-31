@@ -17,11 +17,29 @@ from nim_proxy.provider.retry import (
 from nim_proxy.provider.schema import sanitize_nim_tools
 
 
+from nim_proxy.provider.rate_limit import StrictSlidingWindowLimiter
+
+
 class NimClient:
     """NVIDIA NIM Dedicated Execution Client."""
 
     def __init__(self, key_pool: KeyPoolManager) -> None:
         self.key_pool = key_pool
+        self._limiter: StrictSlidingWindowLimiter | None = None
+        self._limiter_rpm = 0
+
+    async def _check_rate_limit(self) -> None:
+        if settings.rate_limit_rpm != self._limiter_rpm:
+            self._limiter_rpm = settings.rate_limit_rpm
+            if self._limiter_rpm > 0:
+                self._limiter = StrictSlidingWindowLimiter(self._limiter_rpm, 60.0)
+                logger.info(f"Global rate limit configured: {self._limiter_rpm} RPM")
+            else:
+                self._limiter = None
+                logger.info("Global rate limit disabled")
+
+        if self._limiter:
+            await self._limiter.acquire()
 
     def _get_async_client(self, api_key: str) -> openai.AsyncOpenAI:
         return openai.AsyncOpenAI(
@@ -31,6 +49,8 @@ class NimClient:
 
     async def execute_chat(self, body: dict[str, Any]) -> Any:
         """Execute non-streaming or streaming Chat Completion with Multi-Key Failover."""
+        await self._check_rate_limit()
+
         # 清洗 tools 定义
         if "tools" in body and isinstance(body["tools"], list):
             sanitized_tools, _ = sanitize_nim_tools(body["tools"])
