@@ -108,12 +108,18 @@ async def stream_text_as_anthropic_sse(text: str, model: str):
     (the upstream stream cannot be intercepted mid-flight).
     """
     fake_chunk = SimpleNamespace(
+        usage=None,
         choices=[
             SimpleNamespace(
-                delta=SimpleNamespace(content=text, tool_calls=None),
+                delta=SimpleNamespace(
+                    content=text,
+                    tool_calls=None,
+                    reasoning_content=None,
+                    reasoning=None,
+                ),
                 finish_reason="stop",
             )
-        ]
+        ],
     )
     from nim_proxy.api.sse import format_anthropic_sse_stream
 
