@@ -85,6 +85,7 @@ class MessagesRequest(BaseModel):
     stream: bool = False
     tools: list[Tool] | None = None
     tool_choice: dict[str, Any] | None = None
+    stop_sequences: list[str] | None = None
     thinking: ThinkingConfig | None = None
 
 
@@ -108,18 +109,26 @@ def anthropic_request_to_openai_body(req: MessagesRequest) -> dict[str, Any]:
         if isinstance(msg.content, str):
             messages_out.append({"role": role, "content": msg.content})
         elif isinstance(msg.content, list):
-            text_parts = []
+            content_parts = []
             tool_calls = []
 
             for block in msg.content:
                 b_type = getattr(block, "type", None) or (block.get("type") if isinstance(block, dict) else None)
                 
                 if b_type == "text":
-                    text_parts.append(block.text if hasattr(block, "text") else block["text"])
+                    text_val = block.text if hasattr(block, "text") else block["text"]
+                    content_parts.append({"type": "text", "text": text_val})
+                elif b_type == "image":
+                    source = block.source if hasattr(block, "source") else block["source"]
+                    s_type = source.type if hasattr(source, "type") else source["type"]
+                    if s_type == "base64":
+                        media_type = source.media_type if hasattr(source, "media_type") else source["media_type"]
+                        data = source.data if hasattr(source, "data") else source["data"]
+                        content_parts.append({"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{data}"}})
                 elif b_type == "thinking":
                     thinking_content = block.thinking if hasattr(block, "thinking") else block.get("thinking", "")
                     if thinking_content:
-                        text_parts.append(f"<think>\n{thinking_content}\n</think>")
+                        content_parts.append({"type": "text", "text": f"<think>\n{thinking_content}\n</think>"})
                 elif b_type == "redacted_thinking":
                     pass  # Ignore opaque continuation data
                 elif b_type == "tool_use":
@@ -147,11 +156,15 @@ def anthropic_request_to_openai_body(req: MessagesRequest) -> dict[str, Any]:
                         "content": tr_text,
                     })
 
-            if text_parts or tool_calls:
-                msg_obj: dict[str, Any] = {
-                    "role": role,
-                    "content": "\n".join(text_parts) if text_parts else None
-                }
+            if content_parts or tool_calls:
+                msg_obj: dict[str, Any] = {"role": role}
+                
+                # 若全是文本，则合并为字符串；若含多模态(图片)，则保持列表结构
+                if all(p["type"] == "text" for p in content_parts):
+                    msg_obj["content"] = "\n".join(p["text"] for p in content_parts) if content_parts else None
+                else:
+                    msg_obj["content"] = content_parts
+                
                 if tool_calls:
                     msg_obj["tool_calls"] = tool_calls
                 messages_out.append(msg_obj)
@@ -187,6 +200,22 @@ def anthropic_request_to_openai_body(req: MessagesRequest) -> dict[str, Any]:
         body["top_p"] = req.top_p
     if tools_out:
         body["tools"] = tools_out
+
+    if req.tool_choice:
+        choice_type = req.tool_choice.get("type")
+        if choice_type == "tool":
+            name = req.tool_choice.get("name")
+            if name:
+                body["tool_choice"] = {"type": "function", "function": {"name": name}}
+        elif choice_type == "any":
+            body["tool_choice"] = "required"
+        elif choice_type in {"auto", "none", "required"}:
+            body["tool_choice"] = choice_type
+        elif choice_type == "function" and isinstance(req.tool_choice.get("function"), dict):
+            body["tool_choice"] = req.tool_choice
+
+    if req.stop_sequences:
+        body["stop"] = req.stop_sequences
 
     # 求解计算客户端与特定路由命中的 Reasoning 策略
     client_budget = req.thinking.budget_tokens if req.thinking else None
