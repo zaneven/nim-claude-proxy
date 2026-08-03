@@ -28,6 +28,42 @@ class NimClient:
         self._limiter: StrictSlidingWindowLimiter | None = None
         self._limiter_rpm = 0
 
+    async def execute_non_streaming(self, body: dict[str, Any]) -> Any:
+        """Execute a non-streaming chat request, used for recovery continuation.
+
+        Unlike execute_chat, this always forces stream=False and returns
+        the complete response object.
+        """
+        body = {**body, "stream": False}
+        return await self.execute_chat(body)
+
+    async def collect_continuation_text(
+        self, body: dict[str, Any], max_attempts: int = 2
+    ) -> tuple[str, str]:
+        """Collect text + reasoning from a continuation/recovery request.
+
+        Returns (text, reasoning) tuple extracted from the non-streaming response.
+        Used by stream recovery to complete truncated text or tool calls.
+        """
+        last_error = None
+        for attempt in range(max_attempts):
+            try:
+                response = await self.execute_non_streaming(body)
+                choice = response.choices[0]
+                msg = choice.message
+                text = getattr(msg, "content", None) or ""
+                reasoning = getattr(
+                    msg, "reasoning_content",
+                    getattr(msg, "reasoning", None),
+                ) or ""
+                return text, reasoning
+            except Exception as err:
+                last_error = err
+                logger.warning(
+                    f"Recovery continuation attempt {attempt + 1}/{max_attempts} failed: {err}"
+                )
+        raise last_error  # type: ignore[misc]
+
     async def _check_rate_limit(self) -> None:
         if settings.rate_limit_rpm != self._limiter_rpm:
             self._limiter_rpm = settings.rate_limit_rpm
@@ -42,10 +78,22 @@ class NimClient:
             await self._limiter.acquire()
 
     def _get_async_client(self, api_key: str) -> openai.AsyncOpenAI:
-        return openai.AsyncOpenAI(
-            api_key=api_key,
-            base_url=settings.nvidia_nim_base_url,
-        )
+        kwargs: dict[str, Any] = {
+            "api_key": api_key,
+            "base_url": settings.nvidia_nim_base_url,
+        }
+        if settings.nvidia_nim_proxy:
+            import httpx
+            kwargs["http_client"] = httpx.AsyncClient(
+                proxy=settings.nvidia_nim_proxy,
+                timeout=httpx.Timeout(
+                    settings.http_timeout,
+                    connect=10.0,
+                    read=settings.http_timeout,
+                    write=10.0,
+                ),
+            )
+        return openai.AsyncOpenAI(**kwargs)
 
     async def execute_chat(self, body: dict[str, Any]) -> Any:
         """Execute non-streaming or streaming Chat Completion with Multi-Key Failover."""
@@ -74,7 +122,9 @@ class NimClient:
 
                 if body.get("stream", False):
                     # 对流式响应进行原生 Tool 标记归一化处理
-                    return normalize_nim_native_tool_stream(response)
+                    if settings.enable_native_tool_cleaning:
+                        return normalize_nim_native_tool_stream(response)
+                    return response
                 return response
 
             except openai.BadRequestError as err:

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """API Routes for Anthropic & OpenAI compatible endpoints."""
 
 import json
@@ -6,11 +8,17 @@ import uuid
 import httpx
 from typing import Any
 
+import openai
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from loguru import logger
 
-from nim_proxy.api.sse import format_anthropic_sse_stream
+from nim_proxy.api.sse import (
+    SseHoldback,
+    _error_cleanup_events,
+    format_anthropic_sse_stream,
+    sse_error_event,
+)
 from nim_proxy.config.settings import settings
 from nim_proxy.core.anthropic import MessagesRequest, anthropic_request_to_openai_body
 from nim_proxy.core.agent_loop import run_with_web_tools, stream_text_as_anthropic_sse
@@ -18,19 +26,29 @@ from nim_proxy.web_tools.executor import is_web_tool
 from nim_proxy.provider.client import NimClient
 from nim_proxy.provider.key_pool import KeyPoolManager
 from nim_proxy.provider.schema import unalias_tool_call_arguments
+from nim_proxy.provider.stream_recovery import (
+    continuation_suffix,
+    make_text_continuation_body,
+    make_tool_repair_body,
+    accept_tool_json_repair,
+)
 
 router = APIRouter()
 
-# 共享 KeyPoolManager 与 NimClient 实例
+# Shared KeyPoolManager & NimClient instances
 _key_pool = KeyPoolManager(
     api_keys=settings.parsed_api_keys(),
     cooldown_seconds=settings.key_cooldown_seconds,
 )
 _client = NimClient(key_pool=_key_pool)
 
-# 在线模型发现结果缓存（TTL）
+# Online model discovery cache (TTL)
 _ONLINE_MODELS_TTL = 60.0
 _online_models_cache: dict[str, Any] = {"ts": 0.0, "models": []}
+
+# Early transparent retry configuration
+_EARLY_TRANSPARENT_RETRIES = 3
+_MIDSTREAM_RECOVERY_ATTEMPTS = 2
 
 
 async def _fetch_online_models() -> list[str]:
@@ -57,6 +75,257 @@ def _extract_text(response) -> str:
         return ""
 
 
+# ── Stream recovery helpers ────────────────────────────────────────────
+
+
+def _make_stub_ledger(model: str):
+    """Return a minimal object that supports close_all_open_blocks()."""
+    class _Stub:
+        has_tool_blocks = False
+        def close_all_open_blocks(self):
+            return []
+    return _Stub()
+
+
+def _tool_schemas_from_body(body: dict[str, Any]) -> dict[str, Any]:
+    """Extract tool name → input_schema mapping from a request body."""
+    schemas: dict[str, Any] = {}
+    tools = body.get("tools")
+    if isinstance(tools, list):
+        for tool in tools:
+            if not isinstance(tool, dict):
+                continue
+            fn = tool.get("function")
+            if not isinstance(fn, dict):
+                continue
+            name = fn.get("name")
+            params = fn.get("parameters")
+            if isinstance(name, str) and isinstance(params, dict):
+                schemas[name] = params
+    return schemas
+
+
+async def _try_midstream_recovery(
+    body: dict[str, Any],
+    accumulated_text: str,
+    accumulated_reasoning: str,
+    tool_blocks: list[dict[str, Any]],
+    request_id: str,
+) -> list[str] | None:
+    """Attempt midstream recovery: text continuation or tool repair.
+
+    Returns a list of SSE event strings or None if recovery failed.
+    """
+    from nim_proxy.api.sse import _sse_event
+
+    events: list[str] = []
+
+    # ── Tool repair: try to complete incomplete tool calls ──
+    if tool_blocks:
+        schemas = _tool_schemas_from_body(body)
+        all_repaired = True
+        for tb in tool_blocks:
+            if tb.get("stopped"):
+                continue
+            name = tb["name"]
+            prefix = tb["content"]
+            recovery_body = make_tool_repair_body(body, name, prefix, schemas.get(name))
+            if recovery_body is None:
+                all_repaired = False
+                continue
+            try:
+                text, _ = await _client.collect_continuation_text(
+                    recovery_body, max_attempts=_MIDSTREAM_RECOVERY_ATTEMPTS
+                )
+                suffix = accept_tool_json_repair(prefix, text, name, schemas)
+                if suffix:
+                    # Calculate the correct block index for this tool
+                    events.append(_sse_event("content_block_delta", {
+                        "type": "content_block_delta",
+                        "index": tb["block_index"],
+                        "delta": {
+                            "type": "input_json_delta",
+                            "partial_json": suffix,
+                        },
+                    }))
+                    logger.info(
+                        "Tool repair succeeded for '{}' ({} chars recovered)",
+                        name, len(suffix),
+                    )
+                else:
+                    all_repaired = False
+                    logger.warning(
+                        "Tool repair could not parse JSON for '{}'", name,
+                    )
+            except Exception as err:
+                all_repaired = False
+                logger.warning(
+                    "Tool repair request failed for '{}': {}", name, err,
+                )
+        if all_repaired and events:
+            logger.info("Full tool repair succeeded for all incomplete tool calls")
+            return events
+        if not all_repaired and events:
+            logger.warning("Partial tool repair: some tool calls could not be recovered")
+
+    # ── Text continuation: try to continue truncated text ──
+    if accumulated_text or accumulated_reasoning:
+        continuation_body = make_text_continuation_body(body, accumulated_text)
+        if continuation_body is not None:
+            try:
+                text, reasoning = await _client.collect_continuation_text(
+                    continuation_body, max_attempts=_MIDSTREAM_RECOVERY_ATTEMPTS
+                )
+                text_suffix = continuation_suffix(accumulated_text, text)
+                thinking_suffix = continuation_suffix(accumulated_reasoning, reasoning)
+
+                if thinking_suffix:
+                    events.append(
+                        _sse_event("content_block_delta", {
+                            "type": "content_block_delta",
+                            "index": 0,
+                            "delta": {
+                                "type": "thinking_delta",
+                                "thinking": thinking_suffix,
+                            },
+                        })
+                    )
+                if text_suffix:
+                    events.append(
+                        _sse_event("content_block_delta", {
+                            "type": "content_block_delta",
+                            "index": 1,
+                            "delta": {
+                                "type": "text_delta",
+                                "text": text_suffix,
+                            },
+                        })
+                    )
+                if events:
+                    logger.info(
+                        "Text continuation recovered text_suffix={} thinking_suffix={}",
+                        len(text_suffix),
+                        len(thinking_suffix),
+                    )
+                return events
+            except Exception as err:
+                logger.warning("Text continuation request failed: {}", err)
+
+    return None
+
+
+# ── Core streaming async generator with recovery ───────────────────────
+
+
+async def _stream_with_recovery(
+    body: dict[str, Any],
+    model: str,
+    *,
+    request_id: str = "",
+) -> Any:
+    """Stream with early transparent retries and midstream recovery.
+
+    - If the NIM stream fails before any content_block_start, retry silently
+      (the client sees nothing).
+    - If the stream fails after content has been emitted, try text continuation
+      or tool JSON repair.
+    - If all recovery fails, inject an inline error SSE event and close
+      gracefully.
+    """
+    tag = f" request_id={request_id}" if request_id else ""
+
+    for attempt in range(_EARLY_TRANSPARENT_RETRIES):
+        holdback = SseHoldback()
+        ledger_ref: list[Any] = []
+        committed_events_sent = False
+
+        try:
+            raw_stream = await _client.execute_chat({**body, "stream": True})
+
+            async for event in format_anthropic_sse_stream(
+                raw_stream,
+                model,
+                holdback=holdback,
+                _ledger_ref=ledger_ref,
+            ):
+                committed_events_sent = True
+                yield event
+
+            # Stream completed successfully — flush any deferred events
+            for event in holdback.flush():
+                yield event
+            return
+
+        except (openai.APIError, openai.APIConnectionError) as err:
+            committed = holdback.committed or committed_events_sent
+
+            if not committed:
+                # Early transparent retry — nothing was shown to the client
+                logger.warning(
+                    "Stream attempt {}/{} failed before any content_block_start{}: {}",
+                    attempt + 1,
+                    _EARLY_TRANSPARENT_RETRIES,
+                    tag,
+                    err,
+                )
+                holdback.discard()
+                if attempt < _EARLY_TRANSPARENT_RETRIES - 1:
+                    continue
+
+            # Midstream failure — content was already committed to client
+            logger.error(
+                "Stream failed mid-content at attempt {}/{}{}: {}",
+                attempt + 1,
+                _EARLY_TRANSPARENT_RETRIES,
+                tag,
+                err,
+            )
+
+            # Try recovery if we had committed content
+            if committed:
+                try:
+                    ledger = ledger_ref[0] if ledger_ref else None
+                    recovery_events = await _try_midstream_recovery(
+                        body=body,
+                        accumulated_text=ledger.accumulated_text if ledger else "",
+                        accumulated_reasoning=ledger.accumulated_reasoning if ledger else "",
+                        tool_blocks=ledger.tool_block_snapshot() if ledger else [],
+                        request_id=request_id,
+                    )
+                except Exception:
+                    recovery_events = None
+
+                if recovery_events:
+                    for event in recovery_events:
+                        yield event
+
+            # Emit error and close cleanly
+            error_msg = f"NIM stream failed: {err}"
+            for event in _error_cleanup_events(
+                _make_stub_ledger(model), error_msg,
+            ):
+                yield event
+            return
+
+        except Exception as err:
+            # Non-retryable error — inject error inline
+            logger.error("Non-retryable stream error{}: {}", tag, err)
+            if holdback.committed or committed_events_sent:
+                for event in _error_cleanup_events(
+                    _make_stub_ledger(model),
+                    f"Stream error: {err}",
+                ):
+                    yield event
+            else:
+                yield sse_error_event(f"Stream error: {err}")
+            return
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
+
 @router.get("/health")
 async def health_check():
     stats = _key_pool.get_stats()
@@ -71,7 +340,7 @@ async def health_check():
 @router.get("/v1/models")
 @router.get("/models")
 async def list_models():
-    """Return model list compliant with OpenAI and Anthropic client discovery specifications."""
+    """Return model list compliant with OpenAI and Anthropic client discovery specs."""
     known_models = [
         "claude-3-5-sonnet-20241022",
         "claude-3-5-sonnet-latest",
@@ -88,7 +357,7 @@ async def list_models():
     if settings.model_haiku:
         known_models.append(settings.model_haiku)
 
-    # 在线模型列表带 TTL 缓存，避免每次请求都实时拉取上游
+    # Online model list with TTL caching
     now = time.time()
     if now - _online_models_cache["ts"] >= _ONLINE_MODELS_TTL:
         _online_models_cache["models"] = await _fetch_online_models()
@@ -127,7 +396,7 @@ async def handle_anthropic_messages(req: MessagesRequest):
             ) and (settings.enable_web_search or settings.enable_web_fetch)
 
             if web_tools_present:
-                # 流式请求含网络工具时无法中途拦截，改为服务端缓冲解析后回放最终文本
+                # Streaming with web tools: buffer & replay final text as SSE
                 body["stream"] = False
                 final = await run_with_web_tools(_client, body)
                 return StreamingResponse(
@@ -140,30 +409,34 @@ async def handle_anthropic_messages(req: MessagesRequest):
                     },
                 )
 
-            raw_stream = await _client.execute_chat(body)
+            # Regular streaming with early transparent retries + recovery
             return StreamingResponse(
-                format_anthropic_sse_stream(raw_stream, req.model),
+                _stream_with_recovery(
+                    body,
+                    req.model,
+                    request_id=f"msg_{uuid.uuid4().hex[:8]}",
+                ),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
                     "Connection": "keep-alive",
                     "X-Accel-Buffering": "no",
-                }
+                },
             )
-        
-        # 非流式：透明解析 web_search/web_fetch 本地工具后处理
+
+        # Non-streaming: resolve web tools server-side
         response = await run_with_web_tools(_client, body)
         choice = response.choices[0]
         msg = choice.message
 
         content_blocks = []
-        
-        # 1. 提取原生 reasoning 字段
+
+        # 1. Extract native reasoning fields
         reasoning = getattr(msg, "reasoning_content", getattr(msg, "reasoning", None))
         if reasoning:
             content_blocks.append({"type": "thinking", "thinking": reasoning})
 
-        # 2. 从内容中解析 <think> 标签
+        # 2. Parse thinking tags from text content
         if msg.content:
             from nim_proxy.api.sse import ThinkTagParser
             parser = ThinkTagParser()
@@ -172,7 +445,7 @@ async def handle_anthropic_messages(req: MessagesRequest):
                     content_blocks.append({"type": "thinking", "thinking": content})
                 else:
                     content_blocks.append({"type": "text", "text": content})
-            
+
             remaining = parser.flush()
             if remaining:
                 r_type, r_content = remaining
@@ -187,8 +460,8 @@ async def handle_anthropic_messages(req: MessagesRequest):
                     args = json.loads(tc.function.arguments)
                 except Exception:
                     args = {}
-                
-                # 解换 unsafe 别名参数（如 _nim_arg_type -> type）
+
+                # Unalias unsafe parameter names (e.g. _nim_arg_type -> type)
                 clean_args = unalias_tool_call_arguments(args)
 
                 tc_id = getattr(tc, "id", None)
@@ -219,7 +492,7 @@ async def handle_anthropic_messages(req: MessagesRequest):
             "usage": {
                 "input_tokens": getattr(response.usage, "prompt_tokens", 0) if hasattr(response, "usage") else 0,
                 "output_tokens": getattr(response.usage, "completion_tokens", 0) if hasattr(response, "usage") else 0,
-            }
+            },
         }
 
     except Exception as err:
@@ -233,8 +506,8 @@ async def handle_openai_chat(request: Request):
     """OpenAI Chat Completions / Responses Handler.
 
     /v1/responses is converted from the OpenAI Responses shape into the
-    Chat Completions shape (see ``responses_request_to_openai_body``), executed
-    against NIM, then converted back into a minimal Responses-shaped payload.
+    Chat Completions shape, executed against NIM, then converted back
+    into a minimal Responses-shaped payload.
     """
     try:
         body = await request.json()
@@ -254,11 +527,11 @@ async def handle_openai_chat(request: Request):
 
         stream = bool(body.get("stream", False))
         if stream:
-            # 流式 Responses 暂按透传处理
+            # Streaming Responses: passthrough for now
             res = await _client.execute_chat(body)
             return res
 
-        # 非流式：解析本地 web 工具后执行
+        # Non-streaming: resolve local web tools
         body["stream"] = False
         oai_response = await run_with_web_tools(_client, body)
         if is_responses:

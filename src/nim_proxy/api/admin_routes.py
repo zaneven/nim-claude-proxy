@@ -3,6 +3,7 @@
 import httpx
 from typing import Any
 from fastapi import APIRouter, HTTPException
+from loguru import logger
 from pydantic import BaseModel
 
 from nim_proxy.config.persistence import apply_settings_update
