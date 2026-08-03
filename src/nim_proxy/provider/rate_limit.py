@@ -6,11 +6,11 @@ from collections import deque
 from collections.abc import Callable
 
 
-class StrictSlidingWindowLimiter:
-    """Strict sliding window limiter.
+class SmoothRateLimiter:
+    """Smooth rate limiter that paces requests evenly.
 
-    Guarantees: at most ``rate_limit`` acquisitions in any interval of length
-    ``rate_window`` (seconds).
+    Guarantees: exactly 1 request per `rate_window / rate_limit` interval.
+    This prevents burst requests that could trigger upstream 429 rate limits.
 
     Implemented as an async context manager so call sites can do::
 
@@ -24,20 +24,15 @@ class StrictSlidingWindowLimiter:
         if rate_window <= 0:
             raise ValueError("rate_window must be > 0")
 
-        self._rate_limit = int(rate_limit)
-        self._rate_window = float(rate_window)
-        self._times: deque[float] = deque()
+        self._interval = float(rate_window) / float(rate_limit)
+        self._next_allowed_time = 0.0
         self._lock = asyncio.Lock()
 
     async def acquire(self) -> None:
         await self._acquire(None)
 
     async def acquire_if(self, allowed: Callable[[], bool]) -> bool:
-        """Record an acquisition only if ``allowed`` still holds at admission.
-
-        Capacity is awaited first. The synchronous condition and timestamp write
-        then run without yielding, so a rejected admission consumes no quota.
-        """
+        """Record an acquisition only if ``allowed`` still holds at admission."""
         return await self._acquire(allowed)
 
     async def _acquire(self, allowed: Callable[[], bool] | None) -> bool:
@@ -45,26 +40,18 @@ class StrictSlidingWindowLimiter:
             wait_time = 0.0
             async with self._lock:
                 now = time.monotonic()
-                cutoff = now - self._rate_window
-
-                while self._times and self._times[0] <= cutoff:
-                    self._times.popleft()
-
-                if len(self._times) < self._rate_limit:
+                if now >= self._next_allowed_time:
                     if allowed is not None and not allowed():
                         return False
-                    self._times.append(time.monotonic())
+                    self._next_allowed_time = now + self._interval
                     return True
-
-                oldest = self._times[0]
-                wait_time = max(0.0, (oldest + self._rate_window) - now)
+                
+                wait_time = self._next_allowed_time - now
 
             if wait_time > 0:
                 await asyncio.sleep(wait_time)
-            else:
-                await asyncio.sleep(0)
 
-    async def __aenter__(self) -> "StrictSlidingWindowLimiter":
+    async def __aenter__(self) -> "SmoothRateLimiter":
         await self.acquire()
         return self
 

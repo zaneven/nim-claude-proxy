@@ -17,7 +17,7 @@ from nim_proxy.provider.retry import (
 from nim_proxy.provider.schema import sanitize_nim_tools
 
 
-from nim_proxy.provider.rate_limit import StrictSlidingWindowLimiter
+from nim_proxy.provider.rate_limit import SmoothRateLimiter
 
 
 class NimClient:
@@ -25,7 +25,7 @@ class NimClient:
 
     def __init__(self, key_pool: KeyPoolManager) -> None:
         self.key_pool = key_pool
-        self._limiter: StrictSlidingWindowLimiter | None = None
+        self._limiter: SmoothRateLimiter | None = None
         self._limiter_rpm = 0
 
     async def execute_non_streaming(self, body: dict[str, Any]) -> Any:
@@ -68,7 +68,7 @@ class NimClient:
         if settings.rate_limit_rpm != self._limiter_rpm:
             self._limiter_rpm = settings.rate_limit_rpm
             if self._limiter_rpm > 0:
-                self._limiter = StrictSlidingWindowLimiter(self._limiter_rpm, 60.0)
+                self._limiter = SmoothRateLimiter(self._limiter_rpm, 60.0)
                 logger.info(f"Global rate limit configured: {self._limiter_rpm} RPM")
             else:
                 self._limiter = None
