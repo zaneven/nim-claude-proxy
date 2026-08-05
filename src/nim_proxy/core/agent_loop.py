@@ -7,12 +7,14 @@ tool calls are always surfaced to the client untouched.
 """
 
 import json
+import uuid
 from typing import Any
-from types import SimpleNamespace
 
 from loguru import logger
 
 from nim_proxy.config.settings import settings
+from nim_proxy.fcc_port.core.anthropic.thinking import ContentType, ThinkTagParser
+from nim_proxy.provider.schema import unalias_tool_call_arguments
 from nim_proxy.web_tools.executor import handle_local_web_tool, is_web_tool
 
 _MAX_WEB_TOOL_ROUNDS = 5
@@ -45,16 +47,20 @@ def _split_tool_calls(tool_calls: list[Any]) -> tuple[list[Any], list[Any]]:
     return web_calls, non_web
 
 
-async def run_with_web_tools(client: Any, body: dict[str, Any], max_rounds: int = _MAX_WEB_TOOL_ROUNDS) -> Any:
+async def run_with_web_tools(execute_chat: Any, body: dict[str, Any], max_rounds: int = _MAX_WEB_TOOL_ROUNDS) -> Any:
     """Execute chat, resolving web tools server-side, capped at ``max_rounds``.
+
+    ``execute_chat`` is a callable that takes a body dict and returns the
+    upstream OpenAI-format response. This accepts either the fcc_port provider's
+    ``execute_chat_non_streaming`` (with admission + retry) or a thin NimClient wrapper.
 
     Returns the final upstream response (text, or non-web tool calls for the client).
     """
     web_available = settings.enable_web_search or settings.enable_web_fetch
     if not web_available:
-        return await client.execute_chat(body)
+        return await execute_chat(body)
 
-    response = await client.execute_chat(body)
+    response = await execute_chat(body)
 
     for _ in range(max_rounds):
         choice = response.choices[0]
@@ -97,36 +103,173 @@ async def run_with_web_tools(client: Any, body: dict[str, Any], max_rounds: int 
                 "content": result or "",
             })
 
-        response = await client.execute_chat(body)
+        response = await execute_chat(body)
 
     return response
 
 
-async def stream_text_as_anthropic_sse(text: str, model: str):
-    """Yield a minimal Anthropic SSE sequence for a single final text blob.
+def _append_content_chunk(blocks: list[dict[str, Any]], chunk_type: ContentType, content: str) -> None:
+    """Append a parsed thinking/text chunk, merging adjacent same-type blocks."""
+    if not content:
+        return
+    block_type = "thinking" if chunk_type is ContentType.THINKING else "text"
+    key = "thinking" if block_type == "thinking" else "text"
+    if blocks and blocks[-1].get("type") == block_type:
+        blocks[-1][key] += content
+    else:
+        blocks.append({"type": block_type, key: content})
 
-    Used by the streaming path when web tools must be resolved server-side
-    (the upstream stream cannot be intercepted mid-flight).
+
+def openai_final_to_anthropic_message(response: Any, model: str) -> dict[str, Any]:
+    """Convert a final (non-streaming) OpenAI chat response into an Anthropic Message.
+
+    Used when local web tools were resolved server-side: the upstream response
+    arrives as a complete OpenAI payload instead of the engine's SSE stream, so
+    it is converted here with the same semantics as the streaming engine
+    (native reasoning fields, ``<think>`` tag parsing, tool argument
+    un-aliasing, stop-reason mapping, usage passthrough).
     """
-    fake_chunk = SimpleNamespace(
-        usage=None,
-        choices=[
-            SimpleNamespace(
-                delta=SimpleNamespace(
-                    content=text,
-                    tool_calls=None,
-                    reasoning_content=None,
-                    reasoning=None,
-                ),
-                finish_reason="stop",
-            )
-        ],
-    )
-    from nim_proxy.api.sse import format_anthropic_sse_stream
+    choice = response.choices[0]
+    msg = choice.message
 
-    async for event in format_anthropic_sse_stream(_single(fake_chunk), model):
-        yield event
+    content_blocks: list[dict[str, Any]] = []
+
+    # 1. Native reasoning fields emitted by the provider
+    reasoning = getattr(msg, "reasoning_content", None) or getattr(msg, "reasoning", None)
+    if reasoning:
+        content_blocks.append({"type": "thinking", "thinking": reasoning})
+
+    # 2. Parse <think> tags from text content (same parser as the engine)
+    if msg.content:
+        parser = ThinkTagParser()
+        for chunk in parser.feed(msg.content):
+            _append_content_chunk(content_blocks, chunk.type, chunk.content)
+        remaining = parser.flush()
+        if remaining is not None:
+            _append_content_chunk(content_blocks, remaining.type, remaining.content)
+
+    # 3. Tool calls (with NIM argument-name un-aliasing)
+    for tc in getattr(msg, "tool_calls", None) or []:
+        args = _parse_args(getattr(tc.function, "arguments", None))
+        clean_args = unalias_tool_call_arguments(args)
+        tc_id = getattr(tc, "id", None) or f"call_nim_{uuid.uuid4().hex[:10]}"
+        content_blocks.append({
+            "type": "tool_use",
+            "id": str(tc_id),
+            "name": tc.function.name,
+            "input": clean_args if isinstance(clean_args, dict) else args,
+        })
+
+    finish_reason = getattr(choice, "finish_reason", None)
+    if finish_reason == "tool_calls":
+        stop_reason = "tool_use"
+    elif finish_reason == "length":
+        stop_reason = "max_tokens"
+    else:
+        stop_reason = "end_turn"
+
+    usage = getattr(response, "usage", None)
+    input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0) if usage else 0
+    output_tokens = int(getattr(usage, "completion_tokens", 0) or 0) if usage else 0
+
+    return {
+        "id": f"msg_{uuid.uuid4().hex[:24]}",
+        "type": "message",
+        "role": "assistant",
+        "model": model,
+        "content": content_blocks,
+        "stop_reason": stop_reason,
+        "stop_sequence": None,
+        "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
+    }
 
 
-async def _single(chunk):
-    yield chunk
+def _sse_event(event: str, data: dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+async def stream_message_as_anthropic_sse(message: dict[str, Any]):
+    """Replay a complete Anthropic Message as a standard SSE event sequence.
+
+    Used by the streaming path when web tools were resolved server-side (the
+    upstream stream cannot be intercepted mid-flight, so the final aggregated
+    message is replayed). Event shapes mirror the streaming engine's ledger
+    exactly: message_start -> content_block_* -> message_delta -> message_stop.
+    """
+    usage = message.get("usage") or {}
+    input_tokens = int(usage.get("input_tokens", 0) or 0)
+    output_tokens = int(usage.get("output_tokens", 0) or 0)
+
+    yield _sse_event("message_start", {
+        "type": "message_start",
+        "message": {
+            "id": message.get("id") or f"msg_{uuid.uuid4().hex[:24]}",
+            "type": "message",
+            "role": "assistant",
+            "content": [],
+            "model": message.get("model"),
+            "stop_reason": None,
+            "stop_sequence": None,
+            "usage": {"input_tokens": input_tokens, "output_tokens": 1},
+        },
+    })
+
+    for index, block in enumerate(message.get("content") or []):
+        block_type = block.get("type")
+        if block_type == "thinking":
+            yield _sse_event("content_block_start", {
+                "type": "content_block_start",
+                "index": index,
+                "content_block": {"type": "thinking", "thinking": ""},
+            })
+            yield _sse_event("content_block_delta", {
+                "type": "content_block_delta",
+                "index": index,
+                "delta": {"type": "thinking_delta", "thinking": block.get("thinking", "")},
+            })
+        elif block_type == "text":
+            yield _sse_event("content_block_start", {
+                "type": "content_block_start",
+                "index": index,
+                "content_block": {"type": "text", "text": ""},
+            })
+            yield _sse_event("content_block_delta", {
+                "type": "content_block_delta",
+                "index": index,
+                "delta": {"type": "text_delta", "text": block.get("text", "")},
+            })
+        elif block_type == "tool_use":
+            yield _sse_event("content_block_start", {
+                "type": "content_block_start",
+                "index": index,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": block.get("id", ""),
+                    "name": block.get("name", ""),
+                    "input": {},
+                },
+            })
+            yield _sse_event("content_block_delta", {
+                "type": "content_block_delta",
+                "index": index,
+                "delta": {
+                    "type": "input_json_delta",
+                    "partial_json": json.dumps(block.get("input") or {}, ensure_ascii=False),
+                },
+            })
+        else:
+            continue
+        yield _sse_event("content_block_stop", {
+            "type": "content_block_stop",
+            "index": index,
+        })
+
+    yield _sse_event("message_delta", {
+        "type": "message_delta",
+        "delta": {
+            "stop_reason": message.get("stop_reason") or "end_turn",
+            "stop_sequence": None,
+        },
+        "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
+    })
+    yield _sse_event("message_stop", {"type": "message_stop"})

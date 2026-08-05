@@ -18,7 +18,60 @@ def _fake_execute(content="ok", tool_calls=None):
             )],
             usage=SimpleNamespace(prompt_tokens=1, completion_tokens=2),
         )
-    routes_mod._client.execute_chat = _exec
+    routes_mod.nim_provider.execute_chat_non_streaming = _exec
+
+
+def _sse(event: str, data: dict) -> str:
+    import json as _json
+    return f"event: {event}\ndata: {_json.dumps(data)}\n\n"
+
+
+def _message_start_event() -> str:
+    return _sse("message_start", {"type": "message_start", "message": {
+        "id": "msg_test", "type": "message", "role": "assistant",
+        "content": [], "model": "claude-3-5-sonnet-20241022",
+        "stop_reason": None, "stop_sequence": None,
+        "usage": {"input_tokens": 1, "output_tokens": 1},
+    }})
+
+
+def _block_events(index: int, start_block: dict, delta: dict) -> list[str]:
+    return [
+        _sse("content_block_start", {"type": "content_block_start", "index": index,
+                                     "content_block": start_block}),
+        _sse("content_block_delta", {"type": "content_block_delta", "index": index,
+                                     "delta": delta}),
+        _sse("content_block_stop", {"type": "content_block_stop", "index": index}),
+    ]
+
+
+def _message_end_events() -> list[str]:
+    return [
+        _sse("message_delta", {"type": "message_delta",
+                               "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                               "usage": {"input_tokens": 1, "output_tokens": 2}}),
+        _sse("message_stop", {"type": "message_stop"}),
+    ]
+
+
+def _text_message_sse(text: str) -> list[str]:
+    return (
+        [_message_start_event()]
+        + _block_events(0, {"type": "text", "text": ""},
+                        {"type": "text_delta", "text": text})
+        + _message_end_events()
+    )
+
+
+def _mock_provider_stream(monkeypatch, sse_events: list[str]):
+    """Mock the provider seam used by the original engine pipeline."""
+    monkeypatch.setattr(routes_mod.nim_provider, "preflight_stream", lambda *a, **k: None)
+
+    async def _gen(*a, **k):
+        for event in sse_events:
+            yield event
+
+    monkeypatch.setattr(routes_mod.nim_provider, "stream_response", _gen)
 
 
 def test_health(monkeypatch):
@@ -39,7 +92,7 @@ def test_models_no_crash(monkeypatch):
 
 def test_anthropic_messages_non_stream_mock(monkeypatch):
     monkeypatch.setattr(routes_mod.settings, "proxy_api_token", "")
-    _fake_execute(content="hi there")
+    _mock_provider_stream(monkeypatch, _text_message_sse("hi there"))
     c = TestClient(app)
     r = c.post("/v1/messages", json={
         "model": "claude-3-5-sonnet-20241022",
@@ -92,24 +145,20 @@ def test_admin_api_requires_token_when_configured(monkeypatch):
     assert c.get("/admin/api/config", headers={"Authorization": "Bearer secret-token"}).status_code == 200
 
 
-@pytest.mark.asyncio
-async def test_anthropic_messages_non_stream_thinking(monkeypatch):
+def test_anthropic_messages_non_stream_thinking(monkeypatch):
+    """Non-streaming requests aggregate the engine's SSE stream (original parity)."""
     monkeypatch.setattr(routes_mod.settings, "proxy_api_token", "")
-    
-    async def _exec(body):
-        return SimpleNamespace(
-            choices=[SimpleNamespace(
-                message=SimpleNamespace(
-                    role="assistant",
-                    content="<think>internal thought process</think>final answer",
-                    reasoning_content="native reasoning field",
-                    tool_calls=None,
-                ),
-                finish_reason="stop",
-            )],
-            usage=SimpleNamespace(prompt_tokens=10, completion_tokens=20),
-        )
-    routes_mod._client.execute_chat = _exec
+    sse_events = (
+        [_message_start_event()]
+        + _block_events(0, {"type": "thinking", "thinking": ""},
+                        {"type": "thinking_delta", "thinking": "native reasoning field"})
+        + _block_events(1, {"type": "thinking", "thinking": ""},
+                        {"type": "thinking_delta", "thinking": "internal thought process"})
+        + _block_events(2, {"type": "text", "text": ""},
+                        {"type": "text_delta", "text": "final answer"})
+        + _message_end_events()
+    )
+    _mock_provider_stream(monkeypatch, sse_events)
 
     c = TestClient(app)
     payload = {
@@ -119,20 +168,41 @@ async def test_anthropic_messages_non_stream_thinking(monkeypatch):
         "stream": False,
     }
 
-    resp = c.post(
-        "/v1/messages",
-        json=payload,
-    )
+    resp = c.post("/v1/messages", json=payload)
     assert resp.status_code == 200
     data = resp.json()
-    
-    # Non-streaming path: native reasoning field + parsed content blocks
-    assert len(data["content"]) >= 2
 
-    # First block: thinking from native reasoning_content
+    assert len(data["content"]) == 3
+
+    # First block: thinking from native reasoning field
     assert data["content"][0]["type"] == "thinking"
     assert data["content"][0]["thinking"] == "native reasoning field"
 
-    # Remaining blocks from ThinkTagParser
+    # Remaining blocks: parsed thinking + text
     block_types = [b["type"] for b in data["content"][1:]]
-    assert any(t in ("thinking", "text") for t in block_types)
+    assert block_types == ["thinking", "text"]
+    assert data["content"][2]["text"] == "final answer"
+
+
+def test_anthropic_messages_rejects_empty_messages(monkeypatch):
+    monkeypatch.setattr(routes_mod.settings, "proxy_api_token", "")
+    c = TestClient(app)
+    r = c.post("/v1/messages", json={
+        "model": "claude-3-5-sonnet-20241022",
+        "messages": [],
+        "max_tokens": 100,
+        "stream": False,
+    })
+    assert r.status_code == 400
+    assert r.json()["error"]["type"] == "invalid_request_error"
+
+
+def test_anthropic_messages_count_tokens(monkeypatch):
+    monkeypatch.setattr(routes_mod.settings, "proxy_api_token", "")
+    c = TestClient(app)
+    r = c.post("/v1/messages/count_tokens", json={
+        "model": "claude-3-5-sonnet-20241022",
+        "messages": [{"role": "user", "content": "hello world"}],
+    })
+    assert r.status_code == 200
+    assert r.json()["input_tokens"] > 0

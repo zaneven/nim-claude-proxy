@@ -1,12 +1,14 @@
 """Admin API Endpoints for Dashboard Control."""
 
+import os
+import sys
 import httpx
 from typing import Any
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, BackgroundTasks
 from loguru import logger
 from pydantic import BaseModel
 
-from nim_proxy.config.persistence import apply_settings_update
+from nim_proxy.config.persistence import _sync_keys_line, apply_settings_update
 from nim_proxy.config.settings import settings
 from nim_proxy.provider.client import NimClient
 from nim_proxy.provider.key_pool import KeyPoolManager
@@ -26,7 +28,7 @@ FALLBACK_NIM_MODELS = [
 ]
 
 
-def init_admin_globals(key_pool: KeyPoolManager, client: NimClient):
+def init_admin_globals(key_pool: KeyPoolManager, client: NimClient | None):
     global _key_pool, _client
     _key_pool = key_pool
     _client = client
@@ -67,6 +69,19 @@ class TestChatRequest(BaseModel):
     model: str | None = None
 
 
+class KeyAddRequest(BaseModel):
+    api_key: str
+
+
+class KeyEditRequest(BaseModel):
+    old_key: str
+    new_key: str
+
+
+class KeyDeleteRequest(BaseModel):
+    api_key: str
+
+
 @admin_router.get("/config")
 async def get_admin_config():
     """Return all proxy settings and current KeyPool status."""
@@ -75,6 +90,8 @@ async def get_admin_config():
         for k in _key_pool._keys:
             keys_masked.append({
                 "key": k.masked_key,
+                "key_masked": k.masked_key,
+                "raw_key": k.api_key,
                 "is_disabled": k.is_disabled,
                 "cooldown_until": k.cooldown_until,
                 "failure_count": k.failure_count,
@@ -176,6 +193,76 @@ async def reset_keypool():
     raise HTTPException(status_code=500, detail="KeyPool uninitialized.")
 
 
+@admin_router.post("/keys")
+async def add_key(req: KeyAddRequest):
+    """新增单个 NIM API key。"""
+    if not _key_pool:
+        raise HTTPException(status_code=500, detail="KeyPool uninitialized.")
+    clean = req.api_key.strip()
+    if not clean:
+        raise HTTPException(status_code=400, detail="Key cannot be empty.")
+    # 防重复
+    for k in _key_pool._keys:
+        if k.api_key == clean:
+            raise HTTPException(status_code=409, detail="Key already exists.")
+    # 加入 pool
+    await _key_pool.add_keys([clean])
+    # 同步 .env
+    all_keys = [k.api_key for k in _key_pool._keys]
+    _sync_keys_line(all_keys)
+    # 更新 settings 内存
+    settings.nvidia_nim_api_keys = ",".join(all_keys)
+    return {"status": "success", "message": "Key added."}
+
+
+@admin_router.put("/keys")
+async def edit_key(req: KeyEditRequest):
+    """编辑（替换）一个 NIM API key。"""
+    if not _key_pool:
+        raise HTTPException(status_code=500, detail="KeyPool uninitialized.")
+    old = req.old_key.strip()
+    new = req.new_key.strip()
+    if not old or not new:
+        raise HTTPException(status_code=400, detail="Both old_key and new_key are required.")
+    if old == new:
+        raise HTTPException(status_code=400, detail="old_key and new_key are identical.")
+    # 检查 old_key 是否存在
+    found = any(k.api_key == old for k in _key_pool._keys)
+    if not found:
+        raise HTTPException(status_code=404, detail="Key not found.")
+    # 检查 new_key 没有重复
+    for k in _key_pool._keys:
+        if k.api_key == new:
+            raise HTTPException(status_code=409, detail="New key already exists.")
+    # 替换
+    ok = await _key_pool.replace_key(old, new)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to replace key.")
+    # 同步 .env
+    all_keys = [k.api_key for k in _key_pool._keys]
+    _sync_keys_line(all_keys)
+    settings.nvidia_nim_api_keys = ",".join(all_keys)
+    return {"status": "success", "message": "Key updated."}
+
+
+@admin_router.delete("/keys")
+async def delete_key(req: KeyDeleteRequest):
+    """删除一个 NIM API key。"""
+    if not _key_pool:
+        raise HTTPException(status_code=500, detail="KeyPool uninitialized.")
+    target = req.api_key.strip()
+    if not target:
+        raise HTTPException(status_code=400, detail="api_key is required.")
+    ok = await _key_pool.remove_key(target)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Key not found.")
+    # 同步 .env
+    all_keys = [k.api_key for k in _key_pool._keys]
+    _sync_keys_line(all_keys)
+    settings.nvidia_nim_api_keys = ",".join(all_keys)
+    return {"status": "success", "message": "Key deleted."}
+
+
 @admin_router.post("/test_chat")
 async def test_chat(req: TestChatRequest):
     """Run a test prompt against NIM using current KeyPool."""
@@ -202,3 +289,16 @@ async def test_chat(req: TestChatRequest):
             "status": "error",
             "message": str(err),
         }
+
+def _do_restart():
+    logger.warning("Executing os.execv to restart the service...")
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+@admin_router.post("/restart")
+async def restart_service(background_tasks: BackgroundTasks):
+    """Restart the proxy service by replacing the current process."""
+    logger.info("Received restart request via Admin API.")
+    # We schedule the actual restart as a background task so the response can be returned to the client first.
+    background_tasks.add_task(_do_restart)
+    return {"status": "success", "message": "Service is restarting..."}
+

@@ -16,3 +16,8 @@ build/
 .workbuddy/
 .vscode/
 .idea/
+
+# Scratch & temporary
+scratch/
+test_req.json
+

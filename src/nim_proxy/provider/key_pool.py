@@ -6,6 +6,10 @@ from dataclasses import dataclass
 from loguru import logger
 
 
+class KeyPoolExhaustedError(RuntimeError):
+    """All active keys are in cooldown and the wait exceeds the fail-fast threshold."""
+
+
 @dataclass
 class KeyStatus:
     api_key: str
@@ -38,6 +42,42 @@ class KeyPoolManager:
                 clean = k.strip()
                 if clean and clean not in existing:
                     self._keys.append(KeyStatus(api_key=clean))
+
+    async def remove_key(self, api_key: str) -> bool:
+        """按精确值删除一个 key。返回是否找到并删除。"""
+        async with self._lock:
+            for i, k in enumerate(self._keys):
+                if k.api_key == api_key:
+                    self._keys.pop(i)
+                    self._index = min(self._index, len(self._keys) - 1) if self._keys else 0
+                    return True
+        return False
+
+    async def replace_key(self, old_key: str, new_key: str) -> bool:
+        """替换已存在的 key 为新值，保持健康状态不变。"""
+        async with self._lock:
+            for k in self._keys:
+                if k.api_key == old_key:
+                    k.api_key = new_key
+                    return True
+        return False
+
+    async def sync_keys(self, keys: list[str]) -> dict[str, int]:
+        """全量同步 key 列表：新增的加入，多余的删除。返回 {added, removed}。"""
+        async with self._lock:
+            existing = {k.api_key for k in self._keys}
+            incoming = {k.strip() for k in keys if k.strip()}
+            added = incoming - existing
+            removed = existing - incoming
+            self._keys = [k for k in self._keys if k.api_key not in removed]
+            for k in sorted(added):
+                self._keys.append(KeyStatus(api_key=k))
+            self._index = min(self._index, len(self._keys) - 1) if self._keys else 0
+            return {"added": len(added), "removed": len(removed)}
+
+    async def update_cooldown_seconds(self, seconds: float) -> None:
+        """动态更新 cooldown 时长。"""
+        self._cooldown_seconds = seconds
 
     async def get_next_key(self) -> str:
         """Get next active API key via Round-Robin, bypassing keys in cooldown/disabled state."""
@@ -74,9 +114,11 @@ class KeyPoolManager:
             logger.warning(
                 f"All active NIM API keys in cooldown. Waiting {wait_time:.1f}s for earliest key [{earliest.masked_key}]..."
             )
+            if wait_time > 10.0:
+                raise KeyPoolExhaustedError(f"All active NIM API keys in cooldown. Wait time {wait_time:.1f}s exceeds threshold. Failing fast.")
             await asyncio.sleep(wait_time)
 
-        raise RuntimeError("Unable to acquire a NIM API key after cooldown wait (unexpected).")
+        raise KeyPoolExhaustedError("Unable to acquire a NIM API key after cooldown wait (unexpected).")
 
     async def report_status(self, api_key: str, status_code: int | None = None, error: Exception | None = None) -> None:
         """Report HTTP status or network error for a key to trigger failover/cooldown."""
@@ -92,12 +134,16 @@ class KeyPoolManager:
                         logger.error(
                             f"NIM Key [{key_obj.masked_key}] PERMANENTLY DISABLED due to 401 Unauthorized."
                         )
-                    # 429 限流 或 5xx 服务端故障 / 网络异常 -> 进入冷却状态
-                    elif status_code in (429, 500, 502, 503, 504) or status_code is None:
+                    # 429 限流 或 5xx 服务端故障 -> 进入冷却状态
+                    elif status_code in (429, 500, 502, 503, 504):
                         key_obj.cooldown_until = now + self._cooldown_seconds
-                        reason = f"Status {status_code}" if status_code else f"Error: {error}"
                         logger.warning(
-                            f"NIM Key [{key_obj.masked_key}] placed in COOLDOWN for {self._cooldown_seconds}s. ({reason})"
+                            f"NIM Key [{key_obj.masked_key}] placed in COOLDOWN for {self._cooldown_seconds}s. (Status {status_code})"
+                        )
+                    # 网络层异常（连接失败/超时）不冷却 Key：瞬时故障不应烧掉 Key 60s
+                    else:
+                        logger.debug(
+                            f"NIM Key [{key_obj.masked_key}] transient transport error (no cooldown): {error}"
                         )
                     break
 

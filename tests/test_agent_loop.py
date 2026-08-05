@@ -49,7 +49,7 @@ def test_run_with_web_tools_resolves_locally():
         "messages": [{"role": "user", "content": "search"}],
         "tools": [{"type": "function", "function": {"name": "web_search", "parameters": {}}}],
     }
-    resp = asyncio.run(run_with_web_tools(client, body))
+    resp = asyncio.run(run_with_web_tools(client.execute_chat, body))
 
     # 应当循环两次（先 web 工具，再最终文本）
     assert client.calls == 2
@@ -62,7 +62,7 @@ def test_run_with_web_tools_aborts_on_non_web():
     agent_loop.handle_local_web_tool = lambda name, inp: "x"
     client = FakeClientNonWeb()
     body = {"model": "x", "messages": [{"role": "user", "content": "go"}]}
-    resp = asyncio.run(run_with_web_tools(client, body))
+    resp = asyncio.run(run_with_web_tools(client.execute_chat, body))
 
     # 含无法本地处理的工具调用 -> 原样返回，不循环
     assert client.calls == 1

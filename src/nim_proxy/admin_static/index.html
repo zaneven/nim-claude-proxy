@@ -395,6 +395,257 @@
       transform: translateY(0);
       opacity: 1;
     }
+
+    /* Key List */
+    .key-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .key-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      transition: border-color 0.2s;
+    }
+
+    .key-item:hover {
+      border-color: rgba(255, 255, 255, 0.16);
+    }
+
+    .key-item .key-masked {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+      color: var(--accent);
+      flex: 1;
+      word-break: break-all;
+    }
+
+    .key-item .key-status-badge {
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 12px;
+      white-space: nowrap;
+    }
+
+    .key-item .key-status-badge.healthy {
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--accent);
+    }
+
+    .key-item .key-status-badge.disabled-badge {
+      background: rgba(239, 68, 68, 0.15);
+      color: var(--danger);
+    }
+
+    .key-item .key-status-badge.cooldown-badge {
+      background: rgba(245, 158, 11, 0.15);
+      color: var(--warning);
+    }
+
+    .key-item .key-actions {
+      display: flex;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+
+    .btn-icon {
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 6px;
+      border: none;
+      cursor: pointer;
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text-muted);
+      transition: all 0.15s;
+    }
+
+    .btn-icon:hover {
+      background: rgba(255, 255, 255, 0.16);
+      color: var(--text-main);
+    }
+
+    .btn-icon.danger:hover {
+      background: rgba(239, 68, 68, 0.2);
+      color: var(--danger);
+    }
+
+    .btn-icon.confirm:hover {
+      background: rgba(16, 185, 129, 0.2);
+      color: var(--accent);
+    }
+
+    .key-add-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .key-add-row input {
+      flex: 1;
+    }
+
+    .key-edit-input {
+      flex: 1;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+      background: var(--bg-primary);
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      color: var(--text-main);
+      padding: 6px 10px;
+    }
+
+    /* ── Routing Tab: Section Headers ── */
+    .section-header {
+      margin-bottom: 1rem;
+    }
+    .section-header h3 {
+      font-size: 1.05rem;
+      font-weight: 600;
+      margin-bottom: 2px;
+    }
+    .section-header p {
+      color: var(--text-muted);
+      font-size: 0.82rem;
+    }
+    .section-divider {
+      border: none;
+      border-top: 1px solid var(--border-color);
+      margin: 1.5rem 0;
+    }
+
+    /* ── Routing Tab: Route Cards Grid ── */
+    .route-cards {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1rem;
+      margin-bottom: 0;
+    }
+    @media (max-width: 900px) {
+      .route-cards { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 560px) {
+      .route-cards { grid-template-columns: 1fr; }
+    }
+
+    .route-card {
+      background: var(--bg-secondary);
+      border-radius: 10px;
+      padding: 14px 16px;
+      border: 1px solid var(--border-color);
+      border-left: 3px solid var(--border-color);
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .route-card:hover {
+      border-color: rgba(255, 255, 255, 0.18);
+      box-shadow: 0 0 12px rgba(0, 0, 0, 0.2);
+    }
+    /* Per-route accent colors */
+    .route-card.sonnet { border-left-color: #60A5FA; }
+    .route-card.opus   { border-left-color: #FBBF24; }
+    .route-card.haiku  { border-left-color: #34D399; }
+    .route-card.fable  { border-left-color: #A78BFA; }
+
+    .route-card-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .route-card-icon {
+      width: 28px; height: 28px;
+      border-radius: 7px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .route-card-icon.sonnet { background: rgba(96, 165, 250, 0.15); color: #60A5FA; }
+    .route-card-icon.opus   { background: rgba(251, 191, 36, 0.15); color: #FBBF24; }
+    .route-card-icon.haiku  { background: rgba(52, 211, 153, 0.15); color: #34D399; }
+    .route-card-icon.fable  { background: rgba(167, 139, 250, 0.15); color: #A78BFA; }
+
+    .route-card-label {
+      font-size: 0.9rem;
+      font-weight: 600;
+      flex: 1;
+    }
+    .route-status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .route-status-dot.configured {
+      background: var(--accent);
+      box-shadow: 0 0 6px var(--accent-glow);
+    }
+    .route-status-dot.inherited {
+      background: var(--text-muted);
+    }
+
+    .route-model-input {
+      width: 100%;
+      padding: 8px 10px;
+      background: var(--bg-primary);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      color: var(--text-main);
+      font-size: 0.8rem;
+      font-family: 'JetBrains Mono', monospace;
+      margin-bottom: 8px;
+      transition: border-color 0.15s;
+    }
+    .route-model-input:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-glow);
+    }
+    .route-model-input::placeholder {
+      color: var(--text-muted);
+      opacity: 0.55;
+    }
+
+    .route-reasoning-select {
+      width: 100%;
+      padding: 6px 8px;
+      background: var(--bg-primary);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      color: var(--text-main);
+      font-size: 0.78rem;
+    }
+    .route-reasoning-select:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+
+    .route-card .btn-icon {
+      width: 26px; height: 26px;
+    }
+
+    /* ── Routing Tab: Header Row ── */
+    .routing-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 1.25rem;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .routing-toolbar-actions {
+      display: flex;
+      gap: 8px;
+    }
   </style>
 </head>
 <body>
@@ -458,9 +709,17 @@
       </button>
     </nav>
 
-    <div class="status-badge">
-      <div class="status-dot"></div>
-      <span>Service Active</span>
+    <div style="display: flex; gap: 16px; align-items: center;">
+      <button onclick="restartService()" style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); color: var(--danger); padding: 6px 14px; border-radius: 20px; font-size: 0.85rem; font-weight: 500; cursor: pointer; display: flex; align-items: center; gap: 6px; font-family: inherit; transition: all 0.2s;" onmouseover="this.style.background='rgba(239, 68, 68, 0.2)'" onmouseout="this.style.background='rgba(239, 68, 68, 0.1)'">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>
+        </svg>
+        Restart Service
+      </button>
+      <div class="status-badge">
+        <div class="status-dot"></div>
+        <span>Service Active</span>
+      </div>
     </div>
   </header>
 
@@ -561,8 +820,19 @@
         
         <div class="form-group">
           <label class="form-label">NVIDIA NIM API Keys</label>
-          <div class="form-desc">Multiple keys separated by commas. Requests will automatically round-robin and failover.</div>
-          <textarea id="cfg-keys" class="form-control" placeholder="nvapi-key1, nvapi-key2, nvapi-key3"></textarea>
+          <div class="form-desc">Manage individual keys. Keys are automatically round-robin load-balanced with failover cooldown.</div>
+          <div id="key-list" class="key-list">
+            <!-- Populated by JS -->
+          </div>
+          <div class="key-add-row">
+            <input type="text" id="key-add-input" class="form-control" placeholder="nvapi-..." autocomplete="off">
+            <button class="btn btn-primary" onclick="addKey()">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+              </svg>
+              Add
+            </button>
+          </div>
         </div>
 
         <div class="form-group">
@@ -595,114 +865,165 @@
 
     <!-- Tab 3: Routing -->
     <div id="tab-routing" class="tab-content">
+      <!-- ── Toolbar ── -->
+      <div class="routing-toolbar">
+        <div class="section-header">
+          <h3>Model Aliases &amp; Route-Specific Reasoning</h3>
+          <p>Configure which NIM model serves each Claude model tier, with per-route reasoning overrides</p>
+        </div>
+        <div class="routing-toolbar-actions">
+          <button class="btn btn-secondary" onclick="fillAllFromDefault()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
+              <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
+            </svg>
+            Apply Default to All
+          </button>
+          <button class="btn btn-secondary" onclick="fetchModels(true)">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21.5 2v6h-6M2.13 15.57a10 10 0 1 0 .57-8.38l-2.7 2.81"/>
+            </svg>
+            Discover Models
+          </button>
+        </div>
+      </div>
+
+      <!-- ── Section 1: Default Model ── -->
+      <div class="card" style="margin-bottom: 1rem;">
+        <div class="section-header">
+          <h3>Default Model</h3>
+          <p>Fallback model for requests without an explicit route match. All per-route aliases inherit this when not configured.</p>
+        </div>
+        <div style="display: flex; gap: 10px;">
+          <input type="text" id="cfg-default-model" list="nim-models-list" class="form-control"
+                 placeholder="nvidia/nemotron-3-super-120b-a12b" style="flex:1;">
+          <button class="btn btn-secondary" onclick="fillAllFromDefault()" style="white-space:nowrap;"
+                  title="Copy Default Model to all empty route slots">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- ── Section 2: Route Overrides ── -->
+      <div class="section-header" style="margin-top:0.25rem;">
+        <h3>Route-Specific Overrides</h3>
+        <p>Each route can target a different NIM model with its own reasoning policy. Leave empty to inherit the default.</p>
+      </div>
+      <div class="route-cards">
+        <!-- Sonnet -->
+        <div class="route-card sonnet">
+          <div class="route-card-header">
+            <div class="route-card-icon sonnet">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>
+              </svg>
+            </div>
+            <span class="route-card-label">Sonnet</span>
+            <span class="route-status-dot inherited" id="status-sonnet" title="Not configured / inherits Default Model"></span>
+          </div>
+          <input type="text" id="cfg-model-sonnet" list="nim-models-list" class="route-model-input"
+                 placeholder="Inherits Default Model" autocomplete="off" oninput="updateRouteStatus('sonnet')">
+          <select id="cfg-reasoning-sonnet" class="route-reasoning-select">
+            <option value="inherit">Inherit Global Reasoning</option>
+            <option value="client">From Client</option>
+            <option value="off">Off</option>
+            <option value="low">Low (512)</option>
+            <option value="medium">Medium (1024)</option>
+            <option value="high">High (2048)</option>
+            <option value="xhigh">X-High (4096)</option>
+            <option value="max">Max (8192)</option>
+          </select>
+        </div>
+
+        <!-- Opus -->
+        <div class="route-card opus">
+          <div class="route-card-header">
+            <div class="route-card-icon opus">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+              </svg>
+            </div>
+            <span class="route-card-label">Opus</span>
+            <span class="route-status-dot" id="status-opus" title="Not configured / inheriting default model"></span>
+          </div>
+          <input type="text" id="cfg-model-opus" list="nim-models-list" class="route-model-input"
+                 placeholder="Inherits Default Model" autocomplete="off" oninput="updateRouteStatus('opus')">
+          <select id="cfg-reasoning-opus" class="route-reasoning-select">
+            <option value="inherit">Inherit Global Reasoning</option>
+            <option value="client">From Client</option>
+            <option value="off">Off</option>
+            <option value="low">Low (512)</option>
+            <option value="medium">Medium (1024)</option>
+            <option value="high">High (2048)</option>
+            <option value="xhigh">X-High (4096)</option>
+            <option value="max">Max (8192)</option>
+          </select>
+        </div>
+
+        <!-- Haiku -->
+        <div class="route-card haiku">
+          <div class="route-card-header">
+            <div class="route-card-icon haiku">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+              </svg>
+            </div>
+            <span class="route-card-label">Haiku</span>
+            <span class="route-status-dot" id="status-haiku" title="Not configured / inheriting default model"></span>
+          </div>
+          <input type="text" id="cfg-model-haiku" list="nim-models-list" class="route-model-input"
+                 placeholder="Inherits Default Model" autocomplete="off" oninput="updateRouteStatus('haiku')">
+          <select id="cfg-reasoning-haiku" class="route-reasoning-select">
+            <option value="inherit">Inherit Global Reasoning</option>
+            <option value="client">From Client</option>
+            <option value="off">Off</option>
+            <option value="low">Low (512)</option>
+            <option value="medium">Medium (1024)</option>
+            <option value="high">High (2048)</option>
+            <option value="xhigh">X-High (4096)</option>
+            <option value="max">Max (8192)</option>
+          </select>
+        </div>
+
+        <!-- Fable -->
+        <div class="route-card fable">
+          <div class="route-card-header">
+            <div class="route-card-icon fable">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
+              </svg>
+            </div>
+            <span class="route-card-label">Fable</span>
+            <span class="route-status-dot" id="status-fable" title="Not configured / inheriting default model"></span>
+          </div>
+          <input type="text" id="cfg-model-fable" list="nim-models-list" class="route-model-input"
+                 placeholder="Inherits Default Model" autocomplete="off" oninput="updateRouteStatus('fable')">
+          <select id="cfg-reasoning-fable" class="route-reasoning-select">
+            <option value="inherit">Inherit Global Reasoning</option>
+            <option value="client">From Client</option>
+            <option value="off">Off</option>
+            <option value="low">Low (512)</option>
+            <option value="medium">Medium (1024)</option>
+            <option value="high">High (2048)</option>
+            <option value="xhigh">X-High (4096)</option>
+            <option value="max">Max (8192)</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="section-divider"></div>
+
+      <!-- ── Section 3: Global Reasoning ── -->
       <div class="card">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
-          <div>
-            <h3 style="font-size: 1.1rem; font-weight: 600;">Model Aliases & Route-Specific Reasoning</h3>
-            <p style="color: var(--text-muted); font-size: 0.85rem;">Type to search models and customize route-specific reasoning overrides</p>
-          </div>
-          <div style="display: flex; gap: 8px;">
-            <button class="btn btn-secondary" onclick="fillAllFromDefault()">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
-                <rect x="8" y="2" width="8" height="4" rx="1" ry="1"/>
-              </svg>
-              Set All to Default
-            </button>
-            <button class="btn btn-secondary" onclick="fetchModels(true)">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M21.5 2v6h-6M2.13 15.57a10 10 0 1 0 .57-8.38l-2.7 2.81"/>
-              </svg>
-              Fetch / Discover NIM Models
-            </button>
-          </div>
+        <div class="section-header">
+          <h3>Global Reasoning Defaults</h3>
+          <p>Applied when a route's reasoning is set to "Inherit Global". Does not affect routes with explicit reasoning overrides.</p>
         </div>
-
-        <div class="form-group">
-          <label class="form-label">Default NIM Model</label>
-          <div class="form-desc">Fallback model for requests without explicit model routing. Type to search discovered NIM models.</div>
-          <input type="text" id="cfg-default-model" list="nim-models-list" class="form-control" placeholder="nvidia/nemotron-3-super-120b-a12b">
-        </div>
-
         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
           <div class="form-group">
-            <div class="form-label-header">
-              <span class="form-label">Sonnet Target & Reasoning</span>
-              <button class="btn-link-action" onclick="fillFromDefault('cfg-model-sonnet')">Use Default</button>
-            </div>
-            <input type="text" id="cfg-model-sonnet" list="nim-models-list" class="form-control" placeholder="meta/llama-3.3-70b-instruct" style="margin-bottom: 6px;">
-            <select id="cfg-reasoning-sonnet" class="form-control" style="font-size: 0.82rem;">
-              <option value="inherit">Reasoning: Inherit Global</option>
-              <option value="client">Reasoning: From Client</option>
-              <option value="off">Reasoning: Off</option>
-              <option value="low">Reasoning: Low (512)</option>
-              <option value="medium">Reasoning: Medium (1024)</option>
-              <option value="high">Reasoning: High (2048)</option>
-              <option value="xhigh">Reasoning: X-High (4096)</option>
-              <option value="max">Reasoning: Max (8192)</option>
-            </select>
-          </div>
-
-          <div class="form-group">
-            <div class="form-label-header">
-              <span class="form-label">Opus Target & Reasoning</span>
-              <button class="btn-link-action" onclick="fillFromDefault('cfg-model-opus')">Use Default</button>
-            </div>
-            <input type="text" id="cfg-model-opus" list="nim-models-list" class="form-control" placeholder="nvidia/nemotron-4-340b-instruct" style="margin-bottom: 6px;">
-            <select id="cfg-reasoning-opus" class="form-control" style="font-size: 0.82rem;">
-              <option value="inherit">Reasoning: Inherit Global</option>
-              <option value="client">Reasoning: From Client</option>
-              <option value="off">Reasoning: Off</option>
-              <option value="low">Reasoning: Low (512)</option>
-              <option value="medium">Reasoning: Medium (1024)</option>
-              <option value="high">Reasoning: High (2048)</option>
-              <option value="xhigh">Reasoning: X-High (4096)</option>
-              <option value="max">Reasoning: Max (8192)</option>
-            </select>
-          </div>
-
-          <div class="form-group">
-            <div class="form-label-header">
-              <span class="form-label">Haiku Target & Reasoning</span>
-              <button class="btn-link-action" onclick="fillFromDefault('cfg-model-haiku')">Use Default</button>
-            </div>
-            <input type="text" id="cfg-model-haiku" list="nim-models-list" class="form-control" placeholder="mistralai/mistral-7b-instruct-v0.3" style="margin-bottom: 6px;">
-            <select id="cfg-reasoning-haiku" class="form-control" style="font-size: 0.82rem;">
-              <option value="inherit">Reasoning: Inherit Global</option>
-              <option value="client">Reasoning: From Client</option>
-              <option value="off">Reasoning: Off</option>
-              <option value="low">Reasoning: Low (512)</option>
-              <option value="medium">Reasoning: Medium (1024)</option>
-              <option value="high">Reasoning: High (2048)</option>
-              <option value="xhigh">Reasoning: X-High (4096)</option>
-              <option value="max">Reasoning: Max (8192)</option>
-            </select>
-          </div>
-
-          <div class="form-group">
-            <div class="form-label-header">
-              <span class="form-label">Fable Target & Reasoning</span>
-              <button class="btn-link-action" onclick="fillFromDefault('cfg-model-fable')">Use Default</button>
-            </div>
-            <input type="text" id="cfg-model-fable" list="nim-models-list" class="form-control" placeholder="" style="margin-bottom: 6px;">
-            <select id="cfg-reasoning-fable" class="form-control" style="font-size: 0.82rem;">
-              <option value="inherit">Reasoning: Inherit Global</option>
-              <option value="client">Reasoning: From Client</option>
-              <option value="off">Reasoning: Off</option>
-              <option value="low">Reasoning: Low (512)</option>
-              <option value="medium">Reasoning: Medium (1024)</option>
-              <option value="high">Reasoning: High (2048)</option>
-              <option value="xhigh">Reasoning: X-High (4096)</option>
-              <option value="max">Reasoning: Max (8192)</option>
-            </select>
-          </div>
-        </div>
-
-        <hr style="border: none; border-top: 1px solid var(--border-color); margin: 1.5rem 0;">
-
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
-          <div class="form-group">
-            <label class="form-label">Global Reasoning Preference</label>
+            <label class="form-label">Reasoning Preference</label>
             <select id="cfg-reasoning-pref" class="form-control">
               <option value="client">From Client (Respect Client Thinking)</option>
               <option value="off">Off (Disable Reasoning)</option>
@@ -714,12 +1035,11 @@
             </select>
           </div>
           <div class="form-group">
-            <label class="form-label">Default Reasoning Budget (Tokens)</label>
+            <label class="form-label">Reasoning Budget (Tokens)</label>
             <input type="number" id="cfg-reasoning-budget" class="form-control" placeholder="4096">
           </div>
         </div>
-
-        <button class="btn btn-primary" onclick="saveConfig()">Save Changes</button>
+        <button class="btn btn-primary" onclick="saveConfig()">Save All Routing Changes</button>
       </div>
     </div>
 
@@ -864,30 +1184,53 @@
       setTimeout(() => toast.classList.remove('show'), 3000);
     }
 
-    function fillFromDefault(targetId) {
-      const defaultModel = document.getElementById('cfg-default-model').value.trim();
-      if (!defaultModel) {
-        showToast('Default NIM Model is currently empty');
+    async function restartService() {
+      if (!confirm("Are you sure you want to restart the proxy service?")) {
         return;
       }
-      const targetEl = document.getElementById(targetId);
-      if (targetEl) {
-        targetEl.value = defaultModel;
-        showToast('Filled model from Default');
+      try {
+        const res = await apiFetch('/admin/api/restart', { method: 'POST' });
+        const data = await res.json();
+        showToast(data.message || 'Restarting...');
+        setTimeout(() => location.reload(), 2000);
+      } catch (err) {
+        showToast('Failed to send restart request');
       }
     }
 
     function fillAllFromDefault() {
       const defaultModel = document.getElementById('cfg-default-model').value.trim();
       if (!defaultModel) {
-        showToast('Default NIM Model is currently empty');
+        showToast('Default Model is currently empty');
         return;
       }
-      ['cfg-model-sonnet', 'cfg-model-opus', 'cfg-model-haiku', 'cfg-model-fable', 'play-model'].forEach(id => {
+      ['cfg-model-sonnet', 'cfg-model-opus', 'cfg-model-haiku', 'cfg-model-fable'].forEach(id => {
         const el = document.getElementById(id);
-        if (el) el.value = defaultModel;
+        if (el && !el.value.trim()) {
+          el.value = defaultModel;
+        }
       });
-      showToast('Set all alias targets to Default Model');
+      updateAllRouteStatuses();
+      showToast('Fills empty route slots with Default Model');
+    }
+
+    function updateRouteStatus(routeId) {
+      const input = document.getElementById('cfg-model-' + routeId);
+      const dot = document.getElementById('status-' + routeId);
+      if (!input || !dot) return;
+      if (input.value.trim()) {
+        dot.classList.add('configured');
+        dot.classList.remove('inherited');
+        dot.title = 'Route model configured';
+      } else {
+        dot.classList.add('inherited');
+        dot.classList.remove('configured');
+        dot.title = 'Inheriting Default Model';
+      }
+    }
+
+    function updateAllRouteStatuses() {
+      ['sonnet', 'opus', 'haiku', 'fable'].forEach(updateRouteStatus);
     }
 
     function getApiToken() {
@@ -970,9 +1313,11 @@
           `;
         });
 
+        renderKeyList(data.key_details || []);
+        submitPollingSnapshot(data);
+
         if (fillForms) {
           const s = data.settings || {};
-          document.getElementById('cfg-keys').value = s.NVIDIA_NIM_API_KEYS || '';
           document.getElementById('cfg-base-url').value = s.NVIDIA_NIM_BASE_URL || '';
           document.getElementById('cfg-cooldown').value = s.KEY_COOLDOWN_SECONDS || 60;
           document.getElementById('cfg-rpm').value = s.RATE_LIMIT_RPM || 0;
@@ -990,6 +1335,8 @@
           document.getElementById('cfg-reasoning-haiku').value = s.REASONING_HAIKU || 'inherit';
           document.getElementById('cfg-reasoning-fable').value = s.REASONING_FABLE || 'inherit';
           document.getElementById('cfg-reasoning-budget').value = s.DEFAULT_REASONING_BUDGET || 4096;
+
+          updateAllRouteStatuses();
 
           document.getElementById('cfg-web-search').value = s.ENABLE_WEB_SEARCH ? 'true' : 'false';
           document.getElementById('cfg-web-fetch').value = s.ENABLE_WEB_FETCH ? 'true' : 'false';
@@ -1015,7 +1362,6 @@
 
     async function saveConfig() {
       const payload = {
-        nvidia_nim_api_keys: document.getElementById('cfg-keys').value,
         nvidia_nim_base_url: document.getElementById('cfg-base-url').value,
         key_cooldown_seconds: parseFloat(document.getElementById('cfg-cooldown').value),
         rate_limit_rpm: parseInt(document.getElementById('cfg-rpm').value) || 0,
@@ -1064,6 +1410,143 @@
       loadConfig(false);
     }
 
+    // -------- Key List CRUD --------
+
+    function renderKeyList(keyDetails) {
+      const container = document.getElementById('key-list');
+      if (!container) return;
+      const now = Date.now() / 1000;
+      let html = '';
+      (keyDetails || []).forEach((k, idx) => {
+        let statusCls = 'healthy';
+        let statusText = 'Active';
+        if (k.is_disabled) { statusCls = 'disabled-badge'; statusText = 'Disabled'; }
+        else if (k.cooldown_until > now) { statusCls = 'cooldown-badge'; statusText = 'Cooldown ' + Math.ceil(k.cooldown_until - now) + 's'; }
+
+        html += `
+          <div class="key-item" id="key-row-${idx}">
+            <span class="key-masked" id="key-display-${idx}">${k.key_masked || k.key}</span>
+            <input class="key-edit-input" id="key-input-${idx}" style="display:none" value="">
+            <span class="key-status-badge ${statusCls}">${statusText}</span>
+            <div class="key-actions" id="key-actions-${idx}">
+              <button class="btn-icon" onclick="startEditKey(${idx})" title="Edit">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                  <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                </svg>
+              </button>
+              <button class="btn-icon danger" onclick="deleteKey(${idx})" title="Delete">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>
+                </svg>
+              </button>
+            </div>
+            <div class="key-actions" id="key-edit-actions-${idx}" style="display:none">
+              <button class="btn-icon confirm" onclick="saveEditKey(${idx})" title="Save">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <polyline points="20 6 9 17 4 12"/>
+                </svg>
+              </button>
+              <button class="btn-icon danger" onclick="cancelEditKey(${idx})" title="Cancel">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+              </button>
+            </div>
+          </div>`;
+      });
+      container.innerHTML = html;
+    }
+
+    let _keyCache = [];
+
+    // Keep a snapshot of key_details so edit/delete can look up the raw key by index.
+    function submitPollingSnapshot(data) {
+      _keyCache = data.key_details || [];
+    }
+
+    async function addKey() {
+      const input = document.getElementById('key-add-input');
+      const val = input.value.trim();
+      if (!val) return;
+      const res = await apiFetch('/admin/api/keys', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({api_key: val})
+      });
+      if (res.status === 401) return;
+      if (res.ok) {
+        const data = await res.json();
+        showToast(data.message);
+        input.value = '';
+        loadConfig(false);
+      } else {
+        const err = await res.json();
+        showToast(err.detail || 'Failed to add key.');
+      }
+    }
+
+    function startEditKey(idx) {
+      if (!_keyCache || !_keyCache[idx]) return;
+      document.getElementById('key-display-' + idx).style.display = 'none';
+      document.getElementById('key-actions-' + idx).style.display = 'none';
+      const inp = document.getElementById('key-input-' + idx);
+      inp.value = _keyCache[idx].raw_key || '';
+      inp.style.display = '';
+      inp.focus();
+      document.getElementById('key-edit-actions-' + idx).style.display = '';
+    }
+
+    async function saveEditKey(idx) {
+      if (!_keyCache || !_keyCache[idx]) return;
+      const newVal = document.getElementById('key-input-' + idx).value.trim();
+      if (!newVal) return cancelEditKey(idx);
+      const oldVal = _keyCache[idx].raw_key;
+      const res = await apiFetch('/admin/api/keys', {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({old_key: oldVal, new_key: newVal})
+      });
+      if (res.status === 401) return;
+      if (res.ok) {
+        const data = await res.json();
+        showToast(data.message);
+        loadConfig(false);
+      } else {
+        const err = await res.json();
+        showToast(err.detail || 'Failed to save key.');
+        cancelEditKey(idx);
+      }
+    }
+
+    function cancelEditKey(idx) {
+      document.getElementById('key-display-' + idx).style.display = '';
+      document.getElementById('key-actions-' + idx).style.display = '';
+      document.getElementById('key-input-' + idx).style.display = 'none';
+      document.getElementById('key-edit-actions-' + idx).style.display = 'none';
+    }
+
+    async function deleteKey(idx) {
+      if (!_keyCache || !_keyCache[idx]) return;
+      const entry = _keyCache[idx];
+      const apiKey = entry.raw_key;
+      if (!confirm('Delete this key?\n\n' + (entry.key_masked || apiKey))) return;
+      const res = await apiFetch('/admin/api/keys', {
+        method: 'DELETE',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({api_key: apiKey})
+      });
+      if (res.status === 401) return;
+      if (res.ok) {
+        const data = await res.json();
+        showToast(data.message);
+        loadConfig(false);
+      } else {
+        const err = await res.json();
+        showToast(err.detail || 'Failed to delete key.');
+      }
+    }
+
     async function runTestChat() {
       const prompt = document.getElementById('play-prompt').value;
       const model = document.getElementById('play-model').value;
@@ -1079,13 +1562,15 @@
         });
         if (res.status === 401) return;
         const data = await res.json();
-        if (data.status === 'success') {
-          out.innerText = `[SUCCESS] (${data.model_used}):\n${data.response}`;
-        } else {
-          out.innerText = `[ERROR]: ${data.message}`;
+        if (!res.ok) {
+          out.innerText = `[ERROR ${res.status}]: ${data.detail || data.message || res.statusText}`;
+          return;
         }
+        out.innerText = data.status === 'success'
+          ? `[SUCCESS] (${data.model_used}):\n${data.response}`
+          : `[ERROR]: ${data.message}`;
       } catch (err) {
-        out.innerText = `[NETWORK ERROR]: ${err}`;
+        out.innerText = `[NETWORK ERROR]: ${err instanceof Error ? err.message : String(err)}`;
       }
     }
 

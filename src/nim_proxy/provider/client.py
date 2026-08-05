@@ -9,7 +9,7 @@ from loguru import logger
 
 from nim_proxy.config.settings import settings
 from nim_proxy.provider.key_pool import KeyPoolManager
-from nim_proxy.provider.native_tool import normalize_nim_native_tool_stream
+from nim_proxy.fcc_port.providers.nvidia_nim.native_tool_stream import normalize_nim_native_tool_stream
 from nim_proxy.provider.retry import (
     clone_body_without_chat_template,
     clone_body_without_reasoning_budget,
@@ -123,7 +123,7 @@ class NimClient:
                 if body.get("stream", False):
                     # 对流式响应进行原生 Tool 标记归一化处理
                     if settings.enable_native_tool_cleaning:
-                        return normalize_nim_native_tool_stream(response)
+                        return normalize_nim_native_tool_stream(response, body)
                     return response
                 return response
 
@@ -145,6 +145,12 @@ class NimClient:
                     f"Attempt {attempt + 1}/{max_attempts} failed using NIM Key [{api_key[:8]}...]. "
                     f"Retrying with next key... Error: {err}"
                 )
+
+            except RuntimeError as err:
+                if "Failing fast" in str(err) or "All active NIM API keys" in str(err):
+                    from fastapi import HTTPException
+                    raise HTTPException(status_code=429, detail=str(err))
+                raise err
 
         # 若所有可尝试 Key 均失败
         if last_exception:

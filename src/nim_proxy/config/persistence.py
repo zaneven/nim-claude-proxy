@@ -11,15 +11,42 @@ _HOT_RELOAD_UNSUPPORTED = frozenset({"HOST", "PORT"})
 _settings_lock = threading.Lock()
 
 
-def save_settings_to_env(new_values: dict[str, str], env_path: str = ".env") -> bool:
-    """Save dictionary of key-values into .env file, creating/updating lines."""
+def _sync_keys_line(keys: list[str], env_path: str = ".env") -> None:
+    """重写 .env 中 NVIDIA_NIM_API_KEYS 单行为逗号分隔的 key 列表。"""
     path = Path(env_path)
-    lines = []
+    key_name = "NVIDIA_NIM_API_KEYS"
+    value = ",".join(keys)
+
+    lines: list[str] = []
     if path.exists():
         lines = path.read_text(encoding="utf-8").splitlines()
 
-    updated_keys = set()
-    new_lines = []
+    found = False
+    new_lines: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith(f"{key_name}="):
+            new_lines.append(f"{key_name}={value}")
+            found = True
+        else:
+            new_lines.append(line)
+
+    if not found:
+        new_lines.append(f"{key_name}={value}")
+
+    path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    logger.debug(f"NVIDIA_NIM_API_KEYS synced to .env ({len(keys)} keys)")
+
+
+def save_settings_to_env(new_values: dict[str, str], env_path: str = ".env") -> bool:
+    """将键值字典存入 .env 文件，创建或更新对应行。"""
+    path = Path(env_path)
+    lines: list[str] = []
+    if path.exists():
+        lines = path.read_text(encoding="utf-8").splitlines()
+
+    updated_keys: set[str] = set()
+    new_lines: list[str] = []
 
     for line in lines:
         stripped = line.strip()
@@ -38,7 +65,7 @@ def save_settings_to_env(new_values: dict[str, str], env_path: str = ".env") -> 
         else:
             new_lines.append(line)
 
-    # 追加入新的配置
+    # 追加入新的配置项
     for key, val in new_values.items():
         if key not in updated_keys:
             new_lines.append(f"{key}={val}")
@@ -49,10 +76,10 @@ def save_settings_to_env(new_values: dict[str, str], env_path: str = ".env") -> 
 
 
 async def apply_settings_update(new_settings_dict: dict[str, str], key_pool: KeyPoolManager | None = None) -> None:
-    """Update global settings instance and hot-reload KeyPoolManager.
+    """更新全局 settings 并热重载 KeyPoolManager。
 
-    HOST / PORT are binding-time only and skipped here (a restart is required);
-    all other fields are updated on the module-level settings singleton under a lock.
+    HOST / PORT 仅在进程启动时绑定，此处跳过（需重启生效）；
+    其他字段在锁下更新模块级 settings 单例。
     """
     save_settings_to_env(new_settings_dict)
 
@@ -82,8 +109,17 @@ async def apply_settings_update(new_settings_dict: dict[str, str], key_pool: Key
             else:
                 setattr(settings, attr_name, str(val))
 
-    # 重新装载 KeyPool (若存在)
+    # KeyPool 热重载
     if key_pool is not None:
+        # cooldown_seconds 热更新
+        if "KEY_COOLDOWN_SECONDS" in new_settings_dict:
+            try:
+                cooldown_val = float(new_settings_dict["KEY_COOLDOWN_SECONDS"])
+                await key_pool.update_cooldown_seconds(cooldown_val)
+            except (TypeError, ValueError):
+                pass
+
+        # keys 全量同步
         new_keys = settings.parsed_api_keys()
         if new_keys:
-            await key_pool.add_keys(new_keys)
+            await key_pool.sync_keys(new_keys)

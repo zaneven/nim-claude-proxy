@@ -1,54 +1,207 @@
-from __future__ import annotations
-
 """API Routes for Anthropic & OpenAI compatible endpoints."""
 
-import json
 import time
 import uuid
-import httpx
-from typing import Any
+from typing import Any, cast
 
-import openai
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+import httpx
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 from loguru import logger
 
-from nim_proxy.api.sse import (
-    SseHoldback,
-    _error_cleanup_events,
-    format_anthropic_sse_stream,
-    sse_error_event,
-)
 from nim_proxy.config.settings import settings
-from nim_proxy.core.anthropic import MessagesRequest, anthropic_request_to_openai_body
-from nim_proxy.core.agent_loop import run_with_web_tools, stream_text_as_anthropic_sse
-from nim_proxy.web_tools.executor import is_web_tool
-from nim_proxy.provider.client import NimClient
-from nim_proxy.provider.key_pool import KeyPoolManager
-from nim_proxy.provider.schema import unalias_tool_call_arguments
-from nim_proxy.provider.stream_recovery import (
-    continuation_suffix,
-    make_text_continuation_body,
-    make_tool_repair_body,
-    accept_tool_json_repair,
+from nim_proxy.core.agent_loop import (
+    openai_final_to_anthropic_message,
+    run_with_web_tools,
+    stream_message_as_anthropic_sse,
 )
+from nim_proxy.fcc_port.application.errors import ApplicationError, InvalidRequestError
+from nim_proxy.fcc_port.application.execution import ProviderExecutor
+from nim_proxy.fcc_port.application.routing import ModelRouter
+from nim_proxy.fcc_port.config.nim import NimSettings
+from nim_proxy.fcc_port.config.provider_catalog import SUPPORTED_PROVIDER_IDS
+from nim_proxy.fcc_port.config.reasoning import ReasoningPreference
+from nim_proxy.fcc_port.config.settings import Settings
+from nim_proxy.fcc_port.core.anthropic import (
+    MessagesRequest,
+    TokenCountRequest,
+    aggregate_anthropic_sse_to_message,
+    anthropic_error_payload,
+    anthropic_failure_payload,
+    anthropic_status_for_error_type,
+    get_token_count,
+)
+from nim_proxy.fcc_port.core.failures import ExecutionFailure, find_execution_failure
+from nim_proxy.fcc_port.providers.admission import ProviderAdmissionController
+from nim_proxy.fcc_port.providers.base import ProviderConfig
+from nim_proxy.fcc_port.providers.nvidia_nim.client import NvidiaNimProvider
+from nim_proxy.fcc_port.core.trace import close_stream_input
+from nim_proxy.provider.client import NimClient
+from nim_proxy.provider.key_pool import KeyPoolExhaustedError, KeyPoolManager
+from nim_proxy.web_tools.executor import is_web_tool
+
+from .streaming import (
+    EmptyStreamError,
+    ManagedStreamingResponse,
+)
+
 
 router = APIRouter()
 
-# Shared KeyPoolManager & NimClient instances
+
+# Shared KeyPoolManager
 _key_pool = KeyPoolManager(
     api_keys=settings.parsed_api_keys(),
     cooldown_seconds=settings.key_cooldown_seconds,
 )
-_client = NimClient(key_pool=_key_pool)
+
+nim_provider = NvidiaNimProvider(
+    config=ProviderConfig(
+        api_key="dynamic",
+        base_url=settings.nvidia_nim_base_url,
+        proxy=settings.nvidia_nim_proxy,
+        http_read_timeout=settings.http_timeout,
+    ),
+    nim_settings=NimSettings(),
+    admission=ProviderAdmissionController(provider_name="nim", rate_limit=50, rate_window=60.0),
+    key_pool=_key_pool
+)
+
+_client = NimClient(key_pool=_key_pool)  # retained for OpenAI streaming passthrough and admin test-chat
+
 
 # Online model discovery cache (TTL)
 _ONLINE_MODELS_TTL = 60.0
 _online_models_cache: dict[str, Any] = {"ts": 0.0, "models": []}
 
-# Early transparent retry configuration
-_EARLY_TRANSPARENT_RETRIES = 3
-_MIDSTREAM_RECOVERY_ATTEMPTS = 2
+# ---------------------------------------------------------------------------
+# Routing bridge: expose the live proxy settings through the surface that the
+# original free-claude-code ModelRouter / ProviderExecutor expect.
+# ---------------------------------------------------------------------------
+
+
+def _nim_model_ref(value: str | None) -> str | None:
+    """Qualify a bare NIM model name with the ``nvidia_nim/`` provider prefix."""
+    if not value or not value.strip():
+        return None
+    ref = value.strip()
+    head = ref.split("/", 1)[0]
+    if head in SUPPORTED_PROVIDER_IDS:
+        return ref
+    return f"nvidia_nim/{ref}"
+
+
+def _reasoning_pref(value: str | None, fallback: ReasoningPreference) -> ReasoningPreference:
+    try:
+        return ReasoningPreference((value or "").strip().lower())
+    except ValueError:
+        return fallback
+
+
+class _RoutingSettingsAdapter:
+    """Read-through adapter from the live proxy settings to the router surface."""
+
+    @property
+    def model(self) -> str:
+        return _nim_model_ref(settings.nim_default_model) or "nvidia_nim/nvidia/nemotron-3-super-120b-a12b"
+
+    @property
+    def model_fable(self) -> str | None:
+        return _nim_model_ref(settings.model_fable)
+
+    @property
+    def model_opus(self) -> str | None:
+        return _nim_model_ref(settings.model_opus)
+
+    @property
+    def model_sonnet(self) -> str | None:
+        return _nim_model_ref(settings.model_sonnet)
+
+    @property
+    def model_haiku(self) -> str | None:
+        return _nim_model_ref(settings.model_haiku)
+
+    @property
+    def reasoning_policy(self) -> ReasoningPreference:
+        return _reasoning_pref(settings.reasoning_preference, ReasoningPreference.CLIENT)
+
+    @property
+    def reasoning_fable(self) -> ReasoningPreference:
+        return _reasoning_pref(settings.reasoning_fable, ReasoningPreference.INHERIT)
+
+    @property
+    def reasoning_opus(self) -> ReasoningPreference:
+        return _reasoning_pref(settings.reasoning_opus, ReasoningPreference.INHERIT)
+
+    @property
+    def reasoning_sonnet(self) -> ReasoningPreference:
+        return _reasoning_pref(settings.reasoning_sonnet, ReasoningPreference.INHERIT)
+
+    @property
+    def reasoning_haiku(self) -> ReasoningPreference:
+        return _reasoning_pref(settings.reasoning_haiku, ReasoningPreference.INHERIT)
+
+
+def _resolve_provider(provider_id: str) -> NvidiaNimProvider:
+    if provider_id != "nvidia_nim":
+        raise InvalidRequestError(f"Unknown provider_type: '{provider_id}'. Supported: 'nvidia_nim'")
+    return nim_provider
+
+
+_model_router = ModelRouter(cast(Settings, _RoutingSettingsAdapter()))
+_executor = ProviderExecutor(_resolve_provider)
+
+
+# ---------------------------------------------------------------------------
+# Error helpers (Anthropic wire format, same semantics as the original)
+# ---------------------------------------------------------------------------
+
+
+def _error_response(status_code: int, error_type: str, message: str, request_id: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content=anthropic_error_payload(
+            error_type=error_type,
+            message=message,
+            request_id=request_id,
+        ),
+    )
+
+
+def _failure_response(failure: ExecutionFailure, request_id: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=failure.status_code,
+        content=anthropic_failure_payload(failure, request_id=request_id),
+    )
+
+
+def _exception_response(exc: BaseException, request_id: str, context: str) -> JSONResponse:
+    failure = find_execution_failure(exc)
+    if failure is not None:
+        return _failure_response(failure, request_id)
+    if isinstance(exc, KeyPoolExhaustedError):
+        # 所有 Key 冷却中 -> 对客户端表现为上游过载（Claude Code 会按 529 退避重试）
+        logger.warning("{}: {}", context, exc)
+        return _error_response(529, "overloaded_error", str(exc), request_id)
+    logger.exception("{}: {}", context, type(exc).__name__)
+    return _error_response(500, "api_error", f"{type(exc).__name__}", request_id)
+
+
+def _stream_error_fields(error: dict[str, Any]) -> tuple[str, str]:
+    raw_type = error.get("type")
+    error_type = raw_type.strip() if isinstance(raw_type, str) and raw_type.strip() else "api_error"
+    raw_message = error.get("message")
+    message = (
+        raw_message.strip()
+        if isinstance(raw_message, str) and raw_message.strip()
+        else "Provider request failed unexpectedly."
+    )
+    return error_type, message
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 
 async def _fetch_online_models() -> list[str]:
@@ -61,264 +214,19 @@ async def _fetch_online_models() -> list[str]:
             resp = await client.get(url, headers=headers)
             if resp.status_code == 200:
                 online_models = resp.json().get("data", [])
-                return [m.get("id") for m in online_models if isinstance(m, dict) and m.get("id")]
+                return [str(m["id"]) for m in online_models if isinstance(m, dict) and m.get("id")]
     except Exception as exc:
         logger.debug(f"Failed to fetch online models: {exc}")
     return []
 
 
-def _extract_text(response) -> str:
-    """Pull assistant text out of a (non-streaming) OpenAI chat response."""
-    try:
-        return response.choices[0].message.content or ""
-    except Exception:
-        return ""
-
-
-# ── Stream recovery helpers ────────────────────────────────────────────
-
-
-def _make_stub_ledger(model: str):
-    """Return a minimal object that supports close_all_open_blocks()."""
-    class _Stub:
-        has_tool_blocks = False
-        def close_all_open_blocks(self):
-            return []
-    return _Stub()
-
-
-def _tool_schemas_from_body(body: dict[str, Any]) -> dict[str, Any]:
-    """Extract tool name → input_schema mapping from a request body."""
-    schemas: dict[str, Any] = {}
-    tools = body.get("tools")
-    if isinstance(tools, list):
-        for tool in tools:
-            if not isinstance(tool, dict):
-                continue
-            fn = tool.get("function")
-            if not isinstance(fn, dict):
-                continue
-            name = fn.get("name")
-            params = fn.get("parameters")
-            if isinstance(name, str) and isinstance(params, dict):
-                schemas[name] = params
-    return schemas
-
-
-async def _try_midstream_recovery(
-    body: dict[str, Any],
-    accumulated_text: str,
-    accumulated_reasoning: str,
-    tool_blocks: list[dict[str, Any]],
-    request_id: str,
-) -> list[str] | None:
-    """Attempt midstream recovery: text continuation or tool repair.
-
-    Returns a list of SSE event strings or None if recovery failed.
-    """
-    from nim_proxy.api.sse import _sse_event
-
-    events: list[str] = []
-
-    # ── Tool repair: try to complete incomplete tool calls ──
-    if tool_blocks:
-        schemas = _tool_schemas_from_body(body)
-        all_repaired = True
-        for tb in tool_blocks:
-            if tb.get("stopped"):
-                continue
-            name = tb["name"]
-            prefix = tb["content"]
-            recovery_body = make_tool_repair_body(body, name, prefix, schemas.get(name))
-            if recovery_body is None:
-                all_repaired = False
-                continue
-            try:
-                text, _ = await _client.collect_continuation_text(
-                    recovery_body, max_attempts=_MIDSTREAM_RECOVERY_ATTEMPTS
-                )
-                suffix = accept_tool_json_repair(prefix, text, name, schemas)
-                if suffix:
-                    # Calculate the correct block index for this tool
-                    events.append(_sse_event("content_block_delta", {
-                        "type": "content_block_delta",
-                        "index": tb["block_index"],
-                        "delta": {
-                            "type": "input_json_delta",
-                            "partial_json": suffix,
-                        },
-                    }))
-                    logger.info(
-                        "Tool repair succeeded for '{}' ({} chars recovered)",
-                        name, len(suffix),
-                    )
-                else:
-                    all_repaired = False
-                    logger.warning(
-                        "Tool repair could not parse JSON for '{}'", name,
-                    )
-            except Exception as err:
-                all_repaired = False
-                logger.warning(
-                    "Tool repair request failed for '{}': {}", name, err,
-                )
-        if all_repaired and events:
-            logger.info("Full tool repair succeeded for all incomplete tool calls")
-            return events
-        if not all_repaired and events:
-            logger.warning("Partial tool repair: some tool calls could not be recovered")
-
-    # ── Text continuation: try to continue truncated text ──
-    if accumulated_text or accumulated_reasoning:
-        continuation_body = make_text_continuation_body(body, accumulated_text)
-        if continuation_body is not None:
-            try:
-                text, reasoning = await _client.collect_continuation_text(
-                    continuation_body, max_attempts=_MIDSTREAM_RECOVERY_ATTEMPTS
-                )
-                text_suffix = continuation_suffix(accumulated_text, text)
-                thinking_suffix = continuation_suffix(accumulated_reasoning, reasoning)
-
-                if thinking_suffix:
-                    events.append(
-                        _sse_event("content_block_delta", {
-                            "type": "content_block_delta",
-                            "index": 0,
-                            "delta": {
-                                "type": "thinking_delta",
-                                "thinking": thinking_suffix,
-                            },
-                        })
-                    )
-                if text_suffix:
-                    events.append(
-                        _sse_event("content_block_delta", {
-                            "type": "content_block_delta",
-                            "index": 1,
-                            "delta": {
-                                "type": "text_delta",
-                                "text": text_suffix,
-                            },
-                        })
-                    )
-                if events:
-                    logger.info(
-                        "Text continuation recovered text_suffix={} thinking_suffix={}",
-                        len(text_suffix),
-                        len(thinking_suffix),
-                    )
-                return events
-            except Exception as err:
-                logger.warning("Text continuation request failed: {}", err)
-
-    return None
-
-
-# ── Core streaming async generator with recovery ───────────────────────
-
-
-async def _stream_with_recovery(
-    body: dict[str, Any],
-    model: str,
-    *,
-    request_id: str = "",
-) -> Any:
-    """Stream with early transparent retries and midstream recovery.
-
-    - If the NIM stream fails before any content_block_start, retry silently
-      (the client sees nothing).
-    - If the stream fails after content has been emitted, try text continuation
-      or tool JSON repair.
-    - If all recovery fails, inject an inline error SSE event and close
-      gracefully.
-    """
-    tag = f" request_id={request_id}" if request_id else ""
-
-    for attempt in range(_EARLY_TRANSPARENT_RETRIES):
-        holdback = SseHoldback()
-        ledger_ref: list[Any] = []
-        committed_events_sent = False
-
-        try:
-            raw_stream = await _client.execute_chat({**body, "stream": True})
-
-            async for event in format_anthropic_sse_stream(
-                raw_stream,
-                model,
-                holdback=holdback,
-                _ledger_ref=ledger_ref,
-            ):
-                committed_events_sent = True
-                yield event
-
-            # Stream completed successfully — flush any deferred events
-            for event in holdback.flush():
-                yield event
-            return
-
-        except (openai.APIError, openai.APIConnectionError) as err:
-            committed = holdback.committed or committed_events_sent
-
-            if not committed:
-                # Early transparent retry — nothing was shown to the client
-                logger.warning(
-                    "Stream attempt {}/{} failed before any content_block_start{}: {}",
-                    attempt + 1,
-                    _EARLY_TRANSPARENT_RETRIES,
-                    tag,
-                    err,
-                )
-                holdback.discard()
-                if attempt < _EARLY_TRANSPARENT_RETRIES - 1:
-                    continue
-
-            # Midstream failure — content was already committed to client
-            logger.error(
-                "Stream failed mid-content at attempt {}/{}{}: {}",
-                attempt + 1,
-                _EARLY_TRANSPARENT_RETRIES,
-                tag,
-                err,
-            )
-
-            # Try recovery if we had committed content
-            if committed:
-                try:
-                    ledger = ledger_ref[0] if ledger_ref else None
-                    recovery_events = await _try_midstream_recovery(
-                        body=body,
-                        accumulated_text=ledger.accumulated_text if ledger else "",
-                        accumulated_reasoning=ledger.accumulated_reasoning if ledger else "",
-                        tool_blocks=ledger.tool_block_snapshot() if ledger else [],
-                        request_id=request_id,
-                    )
-                except Exception:
-                    recovery_events = None
-
-                if recovery_events:
-                    for event in recovery_events:
-                        yield event
-
-            # Emit error and close cleanly
-            error_msg = f"NIM stream failed: {err}"
-            for event in _error_cleanup_events(
-                _make_stub_ledger(model), error_msg,
-            ):
-                yield event
-            return
-
-        except Exception as err:
-            # Non-retryable error — inject error inline
-            logger.error("Non-retryable stream error{}: {}", tag, err)
-            if holdback.committed or committed_events_sent:
-                for event in _error_cleanup_events(
-                    _make_stub_ledger(model),
-                    f"Stream error: {err}",
-                ):
-                    yield event
-            else:
-                yield sse_error_event(f"Stream error: {err}")
-            return
+def _has_local_web_tools(req: MessagesRequest) -> bool:
+    tools = req.tools or []
+    return (
+        bool(tools)
+        and any(is_web_tool(t.name) for t in tools)
+        and (settings.enable_web_search or settings.enable_web_fetch)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -384,120 +292,127 @@ async def list_models():
     }
 
 
+async def _handle_web_tools_request(req: MessagesRequest, request_id: str):
+    """Resolve local web tools server-side, then answer in Anthropic format."""
+    routed = _model_router.resolve_messages_request(req)
+    body = nim_provider._build_request_body(routed.request, reasoning=routed.reasoning)
+    body["stream"] = False
+
+    async def _execute(body: dict[str, Any]) -> Any:
+        return await nim_provider.execute_chat_non_streaming(body, request_id=request_id)
+
+    final = await run_with_web_tools(_execute, body)
+    message = openai_final_to_anthropic_message(final, routed.resolved.original_model)
+    if req.stream:
+        return ManagedStreamingResponse(
+            stream_message_as_anthropic_sse(message),
+            request_id=request_id,
+        )
+    return JSONResponse(content=message)
+
+
 @router.post("/v1/messages")
 async def handle_anthropic_messages(req: MessagesRequest):
-    """Anthropic Messages API (/v1/messages) Handler for Claude Code & Pi."""
-    body = anthropic_request_to_openai_body(req)
+    """Anthropic Messages API (/v1/messages) Handler for Claude Code & Pi.
 
+    Mirrors the original free-claude-code pipeline exactly: model routing with
+    route-specific reasoning policies, provider preflight, the streaming
+    engine as the single execution path, and SSE aggregation for
+    non-streaming clients.
+    """
+    request_id = f"msg_{uuid.uuid4().hex[:24]}"
     try:
-        if req.stream:
-            web_tools_present = bool(req.tools) and any(
-                is_web_tool(t.name) for t in req.tools
-            ) and (settings.enable_web_search or settings.enable_web_fetch)
-
-            if web_tools_present:
-                # Streaming with web tools: buffer & replay final text as SSE
-                body["stream"] = False
-                final = await run_with_web_tools(_client, body)
-                return StreamingResponse(
-                    stream_text_as_anthropic_sse(_extract_text(final), req.model),
-                    media_type="text/event-stream",
-                    headers={
-                        "Cache-Control": "no-cache",
-                        "Connection": "keep-alive",
-                        "X-Accel-Buffering": "no",
-                    },
-                )
-
-            # Regular streaming with early transparent retries + recovery
-            return StreamingResponse(
-                _stream_with_recovery(
-                    body,
-                    req.model,
-                    request_id=f"msg_{uuid.uuid4().hex[:8]}",
-                ),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                    "X-Accel-Buffering": "no",
-                },
+        if not req.messages:
+            return _error_response(
+                400, "invalid_request_error", "messages: at least one message is required", request_id
             )
 
-        # Non-streaming: resolve web tools server-side
-        response = await run_with_web_tools(_client, body)
-        choice = response.choices[0]
-        msg = choice.message
+        # Local web tools are resolved server-side (proxy-specific feature);
+        # everything else flows through the original engine pipeline.
+        if _has_local_web_tools(req):
+            return await _handle_web_tools_request(req, request_id)
 
-        content_blocks = []
+        routed = _model_router.resolve_messages_request(req)
+        stream = _executor.stream(
+            routed,
+            wire_api="messages",
+            raw_log_label="FULL_PAYLOAD",
+            raw_log_payload=routed.request.model_dump(),
+            request_id=request_id,
+        )
 
-        # 1. Extract native reasoning fields
-        reasoning = getattr(msg, "reasoning_content", getattr(msg, "reasoning", None))
-        if reasoning:
-            content_blocks.append({"type": "thinking", "thinking": reasoning})
+        if not req.stream:
+            # Non-streaming clients get the engine's SSE stream aggregated
+            # into a complete Message (identical to the original handler).
+            try:
+                message, error = await aggregate_anthropic_sse_to_message(stream)
+            except ExecutionFailure as exc:
+                return _failure_response(exc, request_id)
+            except Exception as exc:
+                return _exception_response(exc, request_id, "CREATE_MESSAGE_NON_STREAM_ERROR")
+            if error is not None:
+                error_type, message_text = _stream_error_fields(error)
+                return _error_response(
+                    anthropic_status_for_error_type(error_type), error_type, message_text, request_id
+                )
+            return JSONResponse(content=message)
 
-        # 2. Parse thinking tags from text content
-        if msg.content:
-            from nim_proxy.api.sse import ThinkTagParser
-            parser = ThinkTagParser()
-            for chunk_type, content in parser.feed(msg.content):
-                if chunk_type == "thinking":
-                    content_blocks.append({"type": "thinking", "thinking": content})
-                else:
-                    content_blocks.append({"type": "text", "text": content})
+        # Streaming: surface failures that happen before the first byte as
+        # JSON errors (same contract as the original pre-start handling).
+        try:
+            first_chunk = await anext(stream)
+        except StopAsyncIteration:
+            await close_stream_input(
+                stream, owner="routes", source="api",
+                preserved_error=EmptyStreamError("Upstream provider returned an empty stream."),
+            )
+            return _error_response(500, "api_error", "Upstream provider returned an empty stream.", request_id)
+        except ExecutionFailure as exc:
+            await close_stream_input(
+                stream, owner="routes", source="api", preserved_error=exc,
+            )
+            return _failure_response(exc, request_id)
+        except Exception as exc:
+            await close_stream_input(
+                stream, owner="routes", source="api", preserved_error=exc,
+            )
+            return _exception_response(exc, request_id, "CREATE_MESSAGE_STREAM_START_ERROR")
 
-            remaining = parser.flush()
-            if remaining:
-                r_type, r_content = remaining
-                if r_type == "thinking":
-                    content_blocks.append({"type": "thinking", "thinking": r_content})
-                else:
-                    content_blocks.append({"type": "text", "text": r_content})
+        async def body():
+            yield first_chunk
+            async for chunk in stream:
+                yield chunk
 
-        if getattr(msg, "tool_calls", None):
-            for tc in msg.tool_calls:
-                try:
-                    args = json.loads(tc.function.arguments)
-                except Exception:
-                    args = {}
+        return ManagedStreamingResponse(body(), request_id=request_id)
 
-                # Unalias unsafe parameter names (e.g. _nim_arg_type -> type)
-                clean_args = unalias_tool_call_arguments(args)
+    except ApplicationError as exc:
+        status_code = getattr(exc, "status_code", 400)
+        error_type = "invalid_request_error" if status_code == 400 else "api_error"
+        return _error_response(status_code, error_type, str(exc), request_id)
+    except ExecutionFailure as exc:
+        return _failure_response(exc, request_id)
+    except Exception as exc:
+        return _exception_response(exc, request_id, "CREATE_MESSAGE_ERROR")
 
-                tc_id = getattr(tc, "id", None)
-                if not tc_id:
-                    tc_id = f"call_nim_{uuid.uuid4().hex[:10]}"
 
-                content_blocks.append({
-                    "type": "tool_use",
-                    "id": str(tc_id),
-                    "name": tc.function.name,
-                    "input": clean_args if isinstance(clean_args, dict) else args,
-                })
-
-        stop_reason = "end_turn"
-        if choice.finish_reason == "tool_calls":
-            stop_reason = "tool_use"
-        elif choice.finish_reason == "length":
-            stop_reason = "max_tokens"
-
-        return {
-            "id": f"msg_{uuid.uuid4().hex[:16]}",
-            "type": "message",
-            "role": "assistant",
-            "model": req.model,
-            "content": content_blocks,
-            "stop_reason": stop_reason,
-            "stop_sequence": None,
-            "usage": {
-                "input_tokens": getattr(response.usage, "prompt_tokens", 0) if hasattr(response, "usage") else 0,
-                "output_tokens": getattr(response.usage, "completion_tokens", 0) if hasattr(response, "usage") else 0,
-            },
-        }
-
-    except Exception as err:
-        logger.error(f"Error handling /v1/messages: {err}")
-        raise HTTPException(status_code=500, detail=str(err)) from err
+@router.post("/v1/messages/count_tokens")
+async def handle_count_tokens(req: TokenCountRequest):
+    """Anthropic token-count API (same routing + counting as the original)."""
+    request_id = f"msg_{uuid.uuid4().hex[:24]}"
+    try:
+        if not req.messages:
+            return _error_response(
+                400, "invalid_request_error", "messages: at least one message is required", request_id
+            )
+        routed = _model_router.resolve_token_count_request(req)
+        tokens = get_token_count(routed.request.messages, routed.request.system, routed.request.tools)
+        return {"input_tokens": tokens}
+    except ApplicationError as exc:
+        status_code = getattr(exc, "status_code", 400)
+        error_type = "invalid_request_error" if status_code == 400 else "api_error"
+        return _error_response(status_code, error_type, str(exc), request_id)
+    except Exception as exc:
+        return _exception_response(exc, request_id, "COUNT_TOKENS_ERROR")
 
 
 @router.post("/v1/chat/completions")
@@ -527,17 +442,22 @@ async def handle_openai_chat(request: Request):
 
         stream = bool(body.get("stream", False))
         if stream:
-            # Streaming Responses: passthrough for now
+            # Streaming OpenAI: pass through (NimClient handles key rotation +
+            # rate limiting + native tool cleaning for this path)
             res = await _client.execute_chat(body)
             return res
 
-        # Non-streaming: resolve local web tools
+        # Non-streaming: resolve local web tools through the admission-controlled provider
         body["stream"] = False
-        oai_response = await run_with_web_tools(_client, body)
+
+        async def _execute_non_streaming(b: dict[str, Any]) -> Any:
+            return await nim_provider.execute_chat_non_streaming(b)
+
+        oai_response = await run_with_web_tools(_execute_non_streaming, body)
         if is_responses:
             from nim_proxy.core.openai import openai_response_to_responses
             return openai_response_to_responses(oai_response, model_name)
         return oai_response
     except Exception as err:
         logger.error(f"Error handling OpenAI chat completions: {err}")
-        raise HTTPException(status_code=500, detail=str(err)) from err
+        return _error_response(500, "api_error", str(err), f"msg_{uuid.uuid4().hex[:24]}")
