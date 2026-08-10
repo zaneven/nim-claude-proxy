@@ -89,12 +89,18 @@ def create_app() -> FastAPI:
     app.include_router(router)
     app.include_router(admin_router)
 
+    NO_CACHE_HEADERS = {
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache",
+        "Expires": "0",
+    }
+
     # 5. Admin UI static resources
     static_dir = Path(__file__).parent.parent / "admin_static"
     if static_dir.exists():
         @app.get("/admin", response_class=HTMLResponse)
         async def serve_admin_ui():
-            return FileResponse(static_dir / "index.html")
+            return FileResponse(static_dir / "index.html", headers=NO_CACHE_HEADERS)
 
         @app.get("/admin/{filename:path}")
         async def serve_admin_static(filename: str):
@@ -102,7 +108,7 @@ def create_app() -> FastAPI:
             if not file_path.resolve().is_relative_to(static_dir.resolve()):
                 return JSONResponse(status_code=404, content={"detail": "Not found"})
             if file_path.is_file():
-                return FileResponse(file_path)
+                return FileResponse(file_path, headers=NO_CACHE_HEADERS)
             return JSONResponse(status_code=404, content={"detail": "Not found"})
 
     return app
