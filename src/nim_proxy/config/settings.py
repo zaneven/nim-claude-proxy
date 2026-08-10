@@ -70,6 +70,13 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     enable_native_tool_cleaning: bool = Field(default=True, validation_alias="ENABLE_NATIVE_TOOL_CLEANING")
 
+    # Fast-path optimisations (skip upstream API for known Claude Code housekeeping calls)
+    fast_prefix_detection: bool = Field(default=True, validation_alias="FAST_PREFIX_DETECTION")
+    enable_network_probe_mock: bool = Field(default=True, validation_alias="ENABLE_NETWORK_PROBE_MOCK")
+    enable_title_generation_skip: bool = Field(default=True, validation_alias="ENABLE_TITLE_GENERATION_SKIP")
+    enable_suggestion_mode_skip: bool = Field(default=True, validation_alias="ENABLE_SUGGESTION_MODE_SKIP")
+    enable_filepath_extraction_mock: bool = Field(default=True, validation_alias="ENABLE_FILEPATH_EXTRACTION_MOCK")
+
     # CORS 允许来源（逗号分隔；使用 * 时自动关闭凭据以符合浏览器安全策略）
     cors_origins: str = Field(
         default="http://localhost:8000,http://127.0.0.1:8000",

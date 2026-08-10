@@ -21,3 +21,4 @@ build/
 scratch/
 test_req.json
 
+logs/

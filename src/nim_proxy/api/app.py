@@ -8,7 +8,7 @@ from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 
 from nim_proxy import __version__
 from nim_proxy.api.admin_routes import admin_router, init_admin_globals
-from nim_proxy.api.routes import router, _key_pool, _client
+from nim_proxy.api.routes import router, _key_pool, nim_provider
 from nim_proxy.config.settings import settings
 
 PUBLIC_PATHS = {"/health", "/v1/models", "/models", "/favicon.ico"}
@@ -67,7 +67,11 @@ def create_app() -> FastAPI:
     @app.middleware("http")
     async def auth_middleware(request: Request, call_next):
         path = request.url.path
-        is_public = path == ADMIN_UI_PATH or path in PUBLIC_PATHS
+        is_public = (
+            path == ADMIN_UI_PATH
+            or path in PUBLIC_PATHS
+            or (path.startswith(ADMIN_UI_PATH + "/") and not path.startswith(ADMIN_UI_PATH + "/api/"))
+        )
 
         if settings.proxy_api_token and not is_public:
             if not _check_auth(request, settings.proxy_api_token):
@@ -79,18 +83,27 @@ def create_app() -> FastAPI:
         return await call_next(request)
 
     # 3. Admin globals
-    init_admin_globals(_key_pool, _client)
+    init_admin_globals(_key_pool, nim_provider)
 
     # 4. Routes
     app.include_router(router)
     app.include_router(admin_router)
 
-    # 5. Admin UI static page
+    # 5. Admin UI static resources
     static_dir = Path(__file__).parent.parent / "admin_static"
     if static_dir.exists():
         @app.get("/admin", response_class=HTMLResponse)
         async def serve_admin_ui():
             return FileResponse(static_dir / "index.html")
+
+        @app.get("/admin/{filename:path}")
+        async def serve_admin_static(filename: str):
+            file_path = static_dir / filename
+            if not file_path.resolve().is_relative_to(static_dir.resolve()):
+                return JSONResponse(status_code=404, content={"detail": "Not found"})
+            if file_path.is_file():
+                return FileResponse(file_path)
+            return JSONResponse(status_code=404, content={"detail": "Not found"})
 
     return app
 

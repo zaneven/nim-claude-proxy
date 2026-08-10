@@ -91,7 +91,7 @@ class _MiniMaxM3ToolFramer:
 
     def feed(self, text: str) -> str:
         if self._mode is _FramingMode.FINISHED:
-            raise RuntimeError("MiniMax-M3 tool framer is already finished")
+            return ""  # Silently ignore extra input after finalization (NIM may send trailing chunks)
         if not text:
             return ""
         if self._mode is _FramingMode.TOOL_BLOCK:
@@ -224,12 +224,14 @@ def normalize_nim_native_tool_stream(
 
             content = getattr(delta, "content", None)
             safe_content = (
-                content_framer.feed(content) if isinstance(content, str) else content
+                content_framer.feed(content)
+                if not finalized and isinstance(content, str)
+                else content
             )
             reasoning = getattr(delta, "reasoning_content", None)
             safe_reasoning = (
                 reasoning_framer.feed(reasoning)
-                if isinstance(reasoning, str)
+                if not finalized and isinstance(reasoning, str)
                 else reasoning
             )
             finish_reason = getattr(choice, "finish_reason", None)

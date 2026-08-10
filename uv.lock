@@ -774,7 +774,7 @@ wheels = [
 
 [[package]]
 name = "nim-claude-proxy"
-version = "0.5.0"
+version = "0.7.1"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi", extra = ["standard"] },

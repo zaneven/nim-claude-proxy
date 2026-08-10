@@ -2,6 +2,7 @@
 
 import os
 import sys
+import time
 import httpx
 from typing import Any
 from fastapi import APIRouter, HTTPException, BackgroundTasks
@@ -10,13 +11,12 @@ from pydantic import BaseModel
 
 from nim_proxy.config.persistence import _sync_keys_line, apply_settings_update
 from nim_proxy.config.settings import settings
-from nim_proxy.provider.client import NimClient
 from nim_proxy.provider.key_pool import KeyPoolManager
 
 admin_router = APIRouter(prefix="/admin/api")
 
 _key_pool: KeyPoolManager | None = None
-_client: NimClient | None = None
+_provider: Any = None  # NvidiaNimProvider for test-chat
 
 FALLBACK_NIM_MODELS = [
     "nvidia/nemotron-3-super-120b-a12b",
@@ -27,11 +27,15 @@ FALLBACK_NIM_MODELS = [
     "nvidia/nemotron-4-340b-instruct",
 ]
 
+# ── Model cache with 60s TTL ──
+_model_cache: dict[str, Any] = {"models": [], "source": "fallback", "timestamp": 0.0}
+_MODEL_CACHE_TTL = 60.0
 
-def init_admin_globals(key_pool: KeyPoolManager, client: NimClient | None):
-    global _key_pool, _client
+
+def init_admin_globals(key_pool: KeyPoolManager, provider: Any = None):
+    global _key_pool, _provider
     _key_pool = key_pool
-    _client = client
+    _provider = provider
 
 
 class ConfigSaveRequest(BaseModel):
@@ -62,6 +66,11 @@ class ConfigSaveRequest(BaseModel):
     http_timeout: float | None = None
     log_level: str | None = None
     rate_limit_rpm: int | None = None
+    fast_prefix_detection: bool | None = None
+    enable_network_probe_mock: bool | None = None
+    enable_title_generation_skip: bool | None = None
+    enable_suggestion_mode_skip: bool | None = None
+    enable_filepath_extraction_mock: bool | None = None
 
 
 class TestChatRequest(BaseModel):
@@ -127,6 +136,11 @@ async def get_admin_config():
             "DOUBAO_SEARCH_API_KEY": settings.doubao_search_api_key,
             "LOG_LEVEL": settings.log_level,
             "ENABLE_NATIVE_TOOL_CLEANING": settings.enable_native_tool_cleaning,
+            "FAST_PREFIX_DETECTION": settings.fast_prefix_detection,
+            "ENABLE_NETWORK_PROBE_MOCK": settings.enable_network_probe_mock,
+            "ENABLE_TITLE_GENERATION_SKIP": settings.enable_title_generation_skip,
+            "ENABLE_SUGGESTION_MODE_SKIP": settings.enable_suggestion_mode_skip,
+            "ENABLE_FILEPATH_EXTRACTION_MOCK": settings.enable_filepath_extraction_mock,
         },
         "key_pool_stats": _key_pool.get_stats() if _key_pool else {},
         "key_details": keys_masked,
@@ -134,8 +148,11 @@ async def get_admin_config():
 
 
 @admin_router.get("/models")
-async def discover_nim_models():
+async def discover_nim_models(force_refresh: bool = False):
     """Fetch discovered online NVIDIA NIM models from upstream API using configured KeyPool."""
+    if not force_refresh and _model_cache["timestamp"] and (time.monotonic() - _model_cache["timestamp"]) < _MODEL_CACHE_TTL:
+        return {"models": _model_cache["models"], "source": _model_cache["source"] + " (cached)"}
+
     if not _key_pool:
         return {"models": FALLBACK_NIM_MODELS, "source": "fallback"}
 
@@ -159,10 +176,17 @@ async def discover_nim_models():
                 models = [m.get("id") for m in data if isinstance(m, dict) and m.get("id")]
                 models.sort()
                 if models:
+                    _model_cache["models"] = models
+                    _model_cache["source"] = "live"
+                    _model_cache["timestamp"] = time.monotonic()
                     return {"models": models, "source": "live"}
     except Exception:
         pass
 
+    # Populate cache with fallback so we don't keep hitting the API on failure
+    _model_cache["models"] = FALLBACK_NIM_MODELS
+    _model_cache["source"] = "fallback"
+    _model_cache["timestamp"] = time.monotonic()
     return {"models": FALLBACK_NIM_MODELS, "source": "fallback"}
 
 
@@ -179,6 +203,28 @@ async def save_admin_config(req: ConfigSaveRequest):
     await apply_settings_update(to_save, _key_pool)
 
     return {"status": "success", "message": "Settings updated and saved to .env"}
+
+
+@admin_router.get("/stats")
+async def get_keypool_stats():
+    """Lightweight endpoint for dashboard polling — key stats only, no settings or raw keys."""
+    keys_light = []
+    now = time.monotonic()
+    if _key_pool:
+        for k in _key_pool._keys:
+            remaining = max(0.0, k.cooldown_until - now) if k.cooldown_until > now else 0.0
+            keys_light.append({
+                "key": k.masked_key,
+                "key_masked": k.masked_key,
+                "is_disabled": k.is_disabled,
+                "cooldown_remaining": int(remaining + 0.5),
+                "failure_count": k.failure_count,
+            })
+
+    return {
+        "key_pool_stats": _key_pool.get_stats() if _key_pool else {},
+        "key_details": keys_light,
+    }
 
 
 @admin_router.post("/keypool/reset")
@@ -263,21 +309,59 @@ async def delete_key(req: KeyDeleteRequest):
     return {"status": "success", "message": "Key deleted."}
 
 
+@admin_router.post("/test_chat_stream")
+async def test_chat_stream(req: TestChatRequest):
+    """Run a streaming test prompt against NIM — returns simple text/plain SSE chunks."""
+    from fastapi.responses import StreamingResponse
+
+    if not _provider:
+        raise HTTPException(status_code=500, detail="Provider uninitialized.")
+
+    model_target = req.model or settings.nim_default_model
+    body = {
+        "model": model_target,
+        "messages": [{"role": "user", "content": req.prompt}],
+        "max_tokens": 256,
+        "stream": True,
+    }
+
+    try:
+        stream = await _provider.execute_chat(body)
+    except Exception as err:
+        raise HTTPException(status_code=500, detail=str(err))
+
+    async def generate():
+        try:
+            async for chunk in stream:
+                # chunk is an openai ChatCompletionChunk; extract delta content
+                content = None
+                if chunk.choices:
+                    delta = chunk.choices[0].delta
+                    content = getattr(delta, "content", None)
+                if content:
+                    yield content
+        except Exception as err:
+            yield f"\n[STREAM ERROR: {err}]"
+
+    return StreamingResponse(generate(), media_type="text/plain")
+
+
 @admin_router.post("/test_chat")
 async def test_chat(req: TestChatRequest):
-    """Run a test prompt against NIM using current KeyPool."""
-    if not _client:
-        raise HTTPException(status_code=500, detail="Client uninitialized.")
+    """Run a test prompt against NIM through the admission-controlled provider."""
+    if not _provider:
+        raise HTTPException(status_code=500, detail="Provider uninitialized.")
 
     model_target = req.model or settings.nim_default_model
     body = {
         "model": model_target,
         "messages": [{"role": "user", "content": req.prompt}],
         "max_tokens": 100,
+        "stream": False,
     }
 
     try:
-        res = await _client.execute_chat(body)
+        res = await _provider.execute_chat_non_streaming(body)
         content = res.choices[0].message.content
         return {
             "status": "success",

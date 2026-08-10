@@ -2,6 +2,7 @@
 
 import time
 import uuid
+from dataclasses import replace
 from typing import Any, cast
 
 import httpx
@@ -32,6 +33,7 @@ from nim_proxy.fcc_port.core.anthropic import (
     get_token_count,
 )
 from nim_proxy.fcc_port.core.failures import ExecutionFailure, find_execution_failure
+from nim_proxy.fcc_port.core.reasoning import ReasoningControl, ReasoningPolicy
 from nim_proxy.fcc_port.providers.admission import ProviderAdmissionController
 from nim_proxy.fcc_port.providers.base import ProviderConfig
 from nim_proxy.fcc_port.providers.nvidia_nim.client import NvidiaNimProvider
@@ -40,6 +42,8 @@ from nim_proxy.provider.client import NimClient
 from nim_proxy.provider.key_pool import KeyPoolExhaustedError, KeyPoolManager
 from nim_proxy.web_tools.executor import is_web_tool
 
+from .detection import is_safety_classifier_request
+from .optimization_handlers import try_optimizations
 from .streaming import (
     EmptyStreamError,
     ManagedStreamingResponse,
@@ -149,7 +153,14 @@ def _resolve_provider(provider_id: str) -> NvidiaNimProvider:
 
 
 _model_router = ModelRouter(cast(Settings, _RoutingSettingsAdapter()))
-_executor = ProviderExecutor(_resolve_provider)
+_generation_counter = 0
+
+
+def _new_executor() -> ProviderExecutor:
+    """Create a request-scoped executor with a unique generation id."""
+    global _generation_counter
+    _generation_counter += 1
+    return ProviderExecutor(_resolve_provider, generation_id=_generation_counter)
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +180,13 @@ def _error_response(status_code: int, error_type: str, message: str, request_id:
 
 
 def _failure_response(failure: ExecutionFailure, request_id: str) -> JSONResponse:
+    logger.bind(request_id=request_id).error(
+        "Upstream provider failure: kind={kind} status={status} retryable={retryable} message={message}",
+        kind=failure.kind.value,
+        status=failure.status_code,
+        retryable=failure.retryable,
+        message=failure.message,
+    )
     return JSONResponse(
         status_code=failure.status_code,
         content=anthropic_failure_payload(failure, request_id=request_id),
@@ -181,9 +199,9 @@ def _exception_response(exc: BaseException, request_id: str, context: str) -> JS
         return _failure_response(failure, request_id)
     if isinstance(exc, KeyPoolExhaustedError):
         # 所有 Key 冷却中 -> 对客户端表现为上游过载（Claude Code 会按 529 退避重试）
-        logger.warning("{}: {}", context, exc)
+        logger.bind(request_id=request_id).warning("{}: {}", context, exc)
         return _error_response(529, "overloaded_error", str(exc), request_id)
-    logger.exception("{}: {}", context, type(exc).__name__)
+    logger.bind(request_id=request_id).exception("{}: {}", context, type(exc).__name__)
     return _error_response(500, "api_error", f"{type(exc).__name__}", request_id)
 
 
@@ -245,6 +263,13 @@ async def health_check():
     }
 
 
+@router.post("/stop")
+async def stop_service():
+    """Stop the proxy service gracefully (for CLI/managed lifecycle)."""
+    logger.info("Received /stop request — proxy shutting down via request signal.")
+    return {"status": "stopped", "message": "Proxy received stop signal."}
+
+
 @router.get("/v1/models")
 @router.get("/models")
 async def list_models():
@@ -292,6 +317,56 @@ async def list_models():
     }
 
 
+async def _stream_optimized_response(msg: Any):
+    """Replay an optimized MessagesResponse as Anthropic SSE events."""
+    import json
+    usage = msg.usage
+    inp = int(getattr(usage, "input_tokens", 0) or 0)
+    out = int(getattr(usage, "output_tokens", 0) or 0)
+    msg_id = str(getattr(msg, "id", "") or f"msg_{uuid.uuid4().hex[:24]}")
+    model = str(getattr(msg, "model", "") or "")
+    content = getattr(msg, "content", None) or []
+
+    def _evt(event: str, data: dict) -> str:
+        return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+    yield _evt("message_start", {
+        "type": "message_start", "message": {
+            "id": msg_id, "type": "message", "role": "assistant",
+            "content": [], "model": model,
+            "stop_reason": None, "stop_sequence": None,
+            "usage": {"input_tokens": inp, "output_tokens": 1},
+        },
+    })
+
+    for i, b in enumerate(content):
+        if not isinstance(b, dict):
+            continue
+        bt = b.get("type")
+        if bt == "text":
+            yield _evt("content_block_start", {
+                "type": "content_block_start", "index": i,
+                "content_block": {"type": "text", "text": ""},
+            })
+            yield _evt("content_block_delta", {
+                "type": "content_block_delta", "index": i,
+                "delta": {"type": "text_delta", "text": b.get("text", "")},
+            })
+            yield _evt("content_block_stop", {
+                "type": "content_block_stop", "index": i,
+            })
+
+    yield _evt("message_delta", {
+        "type": "message_delta",
+        "delta": {
+            "stop_reason": str(getattr(msg, "stop_reason", None) or "end_turn"),
+            "stop_sequence": None,
+        },
+        "usage": {"input_tokens": inp, "output_tokens": out},
+    })
+    yield _evt("message_stop", {"type": "message_stop"})
+
+
 async def _handle_web_tools_request(req: MessagesRequest, request_id: str):
     """Resolve local web tools server-side, then answer in Anthropic format."""
     routed = _model_router.resolve_messages_request(req)
@@ -321,6 +396,11 @@ async def handle_anthropic_messages(req: MessagesRequest):
     non-streaming clients.
     """
     request_id = f"msg_{uuid.uuid4().hex[:24]}"
+    lg = logger.bind(request_id=request_id)
+    lg.info(
+        "REQ model={} stream={} msg_count={} tools={} max_tokens={}",
+        req.model, req.stream, len(req.messages), len(req.tools or []), req.max_tokens,
+    )
     try:
         if not req.messages:
             return _error_response(
@@ -333,7 +413,26 @@ async def handle_anthropic_messages(req: MessagesRequest):
             return await _handle_web_tools_request(req, request_id)
 
         routed = _model_router.resolve_messages_request(req)
-        stream = _executor.stream(
+
+        # Safety classifier: Claude Code's auto-mode safety prompt should never
+        # consume reasoning budget — it's a simple yes/no classification.
+        if is_safety_classifier_request(req):
+            if routed.reasoning.control is not ReasoningControl.OFF:
+                routed = replace(routed, reasoning=ReasoningPolicy.off())
+
+        # Fast-path: intercept known Claude Code housekeeping calls
+        # (title generation, quota probe, prefix detection, suggestion mode,
+        # filepath extraction) and serve them locally without touching NIM.
+        optimized = try_optimizations(routed.request, settings, response_model=routed.resolved.original_model)
+        if optimized is not None:
+            if req.stream:
+                return ManagedStreamingResponse(
+                    _stream_optimized_response(optimized),
+                    request_id=request_id,
+                )
+            return JSONResponse(content=cast(dict, optimized.model_dump()))
+
+        stream = _new_executor().stream(
             routed,
             wire_api="messages",
             raw_log_label="FULL_PAYLOAD",
@@ -442,9 +541,14 @@ async def handle_openai_chat(request: Request):
 
         stream = bool(body.get("stream", False))
         if stream:
-            # Streaming OpenAI: pass through (NimClient handles key rotation +
-            # rate limiting + native tool cleaning for this path)
-            res = await _client.execute_chat(body)
+            # Streaming OpenAI: pass through NimClient which handles key
+            # rotation, rate limiting, and native tool cleaning natively.
+            # Full engine routing would require Anthropic→OpenAI SSE conversion;
+            # the NimClient passthrough is pragmatic and battle-tested.
+            try:
+                res = await _client.execute_chat(body)
+            except Exception as exc:
+                return _exception_response(exc, f"msg_{uuid.uuid4().hex[:24]}", "OPENAI_CHAT_STREAM")
             return res
 
         # Non-streaming: resolve local web tools through the admission-controlled provider
