@@ -1,4 +1,30 @@
-  
+    const TAB_INFO = {
+      'dashboard': {
+        title: 'Dashboard Overview',
+        desc: 'Real-time status monitoring and KeyPool load balancing metrics'
+      },
+      'keys': {
+        title: 'NVIDIA NIM & Multi-Key Configuration',
+        desc: 'Manage API keys with automatic round-robin dispatch and failover isolation'
+      },
+      'routing': {
+        title: 'Model Routing & Reasoning Policy',
+        desc: 'Map Anthropic/OpenAI models to NIM backend targets and configure reasoning efforts'
+      },
+      'webtools': {
+        title: 'Local Web Tools Interception',
+        desc: 'Configure web search and fetch tools executed directly on proxy server'
+      },
+      'server': {
+        title: 'Server Security & Network Settings',
+        desc: 'Admin authorization tokens, network host/port, and logging preferences'
+      },
+      'playground': {
+        title: 'Interactive Test Playground',
+        desc: 'Send sample prompts to test upstream NIM model latency and response streaming'
+      }
+    };
+
     function switchTab(tabId) {
       document.querySelectorAll('.nav-tab').forEach(t => {
         t.classList.remove('active');
@@ -6,9 +32,42 @@
       });
       document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
 
-      event.currentTarget.classList.add('active');
-      event.currentTarget.setAttribute('aria-selected', 'true');
-      document.getElementById('tab-' + tabId).classList.add('active');
+      const targetTabBtn = document.querySelector(`.nav-tab[data-tab="${tabId}"]`);
+      if (targetTabBtn) {
+        targetTabBtn.classList.add('active');
+        targetTabBtn.setAttribute('aria-selected', 'true');
+      } else if (typeof event !== 'undefined' && event && event.currentTarget) {
+        event.currentTarget.classList.add('active');
+        event.currentTarget.setAttribute('aria-selected', 'true');
+      }
+
+      const contentEl = document.getElementById('tab-' + tabId);
+      if (contentEl) contentEl.classList.add('active');
+
+      const info = TAB_INFO[tabId];
+      if (info) {
+        const titleEl = document.getElementById('page-title');
+        const descEl = document.getElementById('page-desc');
+        if (titleEl) titleEl.innerText = info.title;
+        if (descEl) descEl.innerText = info.desc;
+      }
+
+      // Close mobile sidebar if open
+      const sidebar = document.getElementById('sidebar');
+      const overlay = document.querySelector('.sidebar-overlay');
+      if (sidebar && sidebar.classList.contains('open')) {
+        sidebar.classList.remove('open');
+      }
+      if (overlay && overlay.classList.contains('open')) {
+        overlay.classList.remove('open');
+      }
+    }
+
+    function toggleSidebar() {
+      const sidebar = document.getElementById('sidebar');
+      const overlay = document.querySelector('.sidebar-overlay');
+      if (sidebar) sidebar.classList.toggle('open');
+      if (overlay) overlay.classList.toggle('open');
     }
 
     function showToast(msg) {
