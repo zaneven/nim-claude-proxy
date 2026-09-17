@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from nim_proxy.config.persistence import _sync_keys_line, apply_settings_update
 from nim_proxy.config.settings import settings
+from nim_proxy.core.metrics import get_metrics_store
 from nim_proxy.provider.key_pool import KeyPoolManager
 
 admin_router = APIRouter(prefix="/admin/api")
@@ -237,6 +238,41 @@ async def reset_keypool():
             k.failure_count = 0
         return {"status": "success", "message": "All keys reset to healthy state."}
     raise HTTPException(status_code=500, detail="KeyPool uninitialized.")
+
+
+@admin_router.get("/usage/summary")
+async def get_usage_summary():
+    """Aggregated token / request statistics for the dashboard."""
+    return get_metrics_store().summary()
+
+
+@admin_router.get("/usage/records")
+async def get_usage_records(
+    page: int = 1,
+    page_size: int = 50,
+    status: str | None = None,
+    endpoint: str | None = None,
+    model: str | None = None,
+):
+    """Paginated request-forwarding records."""
+    if page < 1:
+        page = 1
+    if page_size < 1 or page_size > 500:
+        page_size = 50
+    return get_metrics_store().records(
+        page=page,
+        page_size=page_size,
+        status=status or None,
+        endpoint=endpoint or None,
+        model=model or None,
+    )
+
+
+@admin_router.post("/usage/reset")
+async def reset_usage_metrics():
+    """Clear all recorded usage metrics and forwarding records."""
+    get_metrics_store().reset()
+    return {"status": "success", "message": "Usage metrics cleared."}
 
 
 @admin_router.post("/keys")

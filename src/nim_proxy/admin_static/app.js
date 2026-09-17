@@ -7,6 +7,10 @@
         title: 'NVIDIA NIM & Multi-Key Configuration',
         desc: 'Manage API keys with automatic round-robin dispatch and failover isolation'
       },
+      'requests': {
+        title: 'Request Forwarding Records & Usage',
+        desc: 'Token statistics and per-request logs for every proxied API call'
+      },
       'routing': {
         title: 'Model Routing & Reasoning Policy',
         desc: 'Map Anthropic/OpenAI models to NIM backend targets and configure reasoning efforts'
@@ -43,6 +47,10 @@
 
       const contentEl = document.getElementById('tab-' + tabId);
       if (contentEl) contentEl.classList.add('active');
+
+      if (tabId === 'requests') {
+        loadUsageRecords();
+      }
 
       const info = TAB_INFO[tabId];
       if (info) {
@@ -672,13 +680,148 @@
       }
     }
 
+    // ── Usage metrics (dashboard + requests page) ──
+
+    function esc(s) {
+      return String(s ?? '').replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      }[c]));
+    }
+
+    function fmtTokens(n) {
+      n = Number(n) || 0;
+      if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+      if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+      if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+      return String(n);
+    }
+
+    function fmtTs(ts) {
+      const d = new Date(Number(ts) * 1000);
+      const pad = (x) => String(x).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
+
+    async function loadUsageSummary() {
+      try {
+        const res = await apiFetch('/admin/api/usage/summary');
+        if (res.status === 401) return;
+        const data = await res.json();
+        const t = data.totals || {};
+        document.getElementById('stat-requests').innerText = t.requests || 0;
+        document.getElementById('stat-success').innerText = t.success || 0;
+        document.getElementById('stat-failed').innerText = t.failed || 0;
+        document.getElementById('stat-tokens').innerText = fmtTokens(t.total_tokens);
+
+        const tbody = document.getElementById('usage-model-body');
+        tbody.innerHTML = '';
+        (data.by_model || []).forEach(m => {
+          tbody.innerHTML += `
+            <tr>
+              <td>${esc(m.model)}</td>
+              <td>${m.requests}</td>
+              <td style="color:#34D399;">${m.success}</td>
+              <td style="color:#F87171;">${m.failed}</td>
+              <td>${fmtTokens(m.input_tokens)}</td>
+              <td>${fmtTokens(m.output_tokens)}</td>
+            </tr>
+          `;
+        });
+        if (!(data.by_model || []).length) {
+          tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-muted);">No requests recorded yet</td></tr>';
+        }
+      } catch (err) {
+        console.error('Failed to load usage summary:', err);
+      }
+    }
+
+    let _usagePage = 1;
+    const _usagePageSize = 25;
+
+    async function loadUsageRecords() {
+      try {
+        const status = document.getElementById('usage-filter-status').value;
+        const endpoint = document.getElementById('usage-filter-endpoint').value;
+        const model = document.getElementById('usage-filter-model').value.trim();
+        const params = new URLSearchParams({ page: String(_usagePage), page_size: String(_usagePageSize) });
+        if (status) params.set('status', status);
+        if (endpoint) params.set('endpoint', endpoint);
+        if (model) params.set('model', model);
+        const res = await apiFetch('/admin/api/usage/records?' + params.toString());
+        if (res.status === 401) return;
+        const data = await res.json();
+        renderUsageRecords(data);
+      } catch (err) {
+        console.error('Failed to load usage records:', err);
+      }
+    }
+
+    function renderUsageRecords(data) {
+      const tbody = document.getElementById('usage-records-body');
+      tbody.innerHTML = '';
+      (data.records || []).forEach(r => {
+        const badge = r.status === 'success'
+          ? '<span class="badge badge-success">Success</span>'
+          : '<span class="badge badge-danger">Failed</span>';
+        const streamText = r.stream ? 'stream' : 'sync';
+        tbody.innerHTML += `
+          <tr>
+            <td style="white-space:nowrap;">${fmtTs(r.ts)}</td>
+            <td>${esc(r.endpoint)}</td>
+            <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(r.model)}">${esc(r.model)}</td>
+            <td>${streamText}</td>
+            <td>${badge}</td>
+            <td>${r.latency_ms}ms</td>
+            <td>${fmtTokens(r.input_tokens)}</td>
+            <td>${fmtTokens(r.output_tokens)}</td>
+            <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#F87171;" title="${esc(r.error || '')}">${esc(r.error || '')}</td>
+          </tr>
+        `;
+      });
+      if (!(data.records || []).length) {
+        tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:var(--text-muted);">No records found</td></tr>';
+      }
+      document.getElementById('usage-page-info').innerText =
+        `Page ${data.page} / ${Math.max(data.pages, 1)} (${data.total} records)`;
+      document.getElementById('usage-prev').disabled = data.page <= 1;
+      document.getElementById('usage-next').disabled = data.page >= data.pages;
+    }
+
+    function usagePage(delta) {
+      _usagePage += delta;
+      if (_usagePage < 1) _usagePage = 1;
+      loadUsageRecords();
+    }
+
+    function refreshUsageRecords() {
+      _usagePage = 1;
+      loadUsageRecords();
+    }
+
+    async function resetUsageMetrics() {
+      if (!confirm('Clear all usage metrics and forwarding records?')) return;
+      try {
+        const res = await apiFetch('/admin/api/usage/reset', { method: 'POST' });
+        if (res.status === 401) return;
+        const data = await res.json();
+        showToast(data.message || 'Usage metrics cleared');
+        _usagePage = 1;
+        loadUsageRecords();
+        loadUsageSummary();
+      } catch (err) {
+        showToast('Failed to clear usage metrics');
+      }
+    }
+
     loadConfig(true);
     fetchModels();
+    loadUsageSummary();
     let _pollAbort = null;
     setInterval(() => {
       if (_pollAbort) _pollAbort.abort();
       _pollAbort = new AbortController();
       // TODO: pass signal to loadStats for clean cancellation
       loadStats();
+      loadUsageSummary();
     }, 5000);
   
