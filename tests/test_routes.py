@@ -206,3 +206,112 @@ def test_anthropic_messages_count_tokens(monkeypatch):
     })
     assert r.status_code == 200
     assert r.json()["input_tokens"] > 0
+
+
+# ── Usage metrics record the RESOLVED (actually-forwarded) model ──────────
+
+
+@pytest.fixture
+def isolated_store(monkeypatch, tmp_path):
+    """Point the process-wide metrics store at a tmp path for this test."""
+    import nim_proxy.core.metrics as metrics_mod
+    from nim_proxy.core.metrics import MetricsStore
+
+    store = MetricsStore(
+        str(tmp_path / "route_usage.jsonl"),
+        str(tmp_path / "route_usage_summary.json"),
+    )
+    monkeypatch.setattr(metrics_mod, "_default_store", store)
+    return store
+
+
+def test_anthropic_records_resolved_default_model(monkeypatch, isolated_store):
+    """Client-sent full model id is routed to the proxy default; stats must
+    record the resolved upstream model, not the stale client id."""
+    monkeypatch.setattr(routes_mod.settings, "proxy_api_token", "")
+    monkeypatch.setattr(routes_mod.settings, "nim_default_model", "deepseek-ai/deepseek-v4.1-flash")
+    _mock_provider_stream(monkeypatch, _text_message_sse("hi"))
+    c = TestClient(app)
+    r = c.post("/v1/messages", json={
+        "model": "deepseek-ai/deepseek-v4-flash-0731",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 100,
+        "stream": False,
+    })
+    assert r.status_code == 200
+    records = isolated_store.records(page=1, page_size=10)["records"]
+    assert len(records) == 1
+    assert records[0]["model"] == "deepseek-ai/deepseek-v4.1-flash"
+
+
+def test_anthropic_records_resolved_route_alias(monkeypatch, isolated_store):
+    """Route alias 'sonnet' must be recorded as the configured MODEL_SONNET."""
+    monkeypatch.setattr(routes_mod.settings, "proxy_api_token", "")
+    monkeypatch.setattr(routes_mod.settings, "model_sonnet", "deepseek-ai/deepseek-v4.1-flash")
+    _mock_provider_stream(monkeypatch, _text_message_sse("hi"))
+    c = TestClient(app)
+    r = c.post("/v1/messages", json={
+        "model": "sonnet",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 100,
+        "stream": False,
+    })
+    assert r.status_code == 200
+    records = isolated_store.records(page=1, page_size=10)["records"]
+    assert len(records) == 1
+    assert records[0]["model"] == "deepseek-ai/deepseek-v4.1-flash"
+
+
+def test_anthropic_stream_records_resolved_model(monkeypatch, isolated_store):
+    """Streaming path records the resolved model when the stream completes."""
+    monkeypatch.setattr(routes_mod.settings, "proxy_api_token", "")
+    monkeypatch.setattr(routes_mod.settings, "nim_default_model", "deepseek-ai/deepseek-v4.1-flash")
+    _mock_provider_stream(monkeypatch, _text_message_sse("hi"))
+    c = TestClient(app)
+    with c.stream("POST", "/v1/messages", json={
+        "model": "deepseek-ai/deepseek-v4-flash-0731",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 100,
+        "stream": True,
+    }) as response:
+        assert response.status_code == 200
+        for _line in response.iter_lines():
+            pass
+
+    records = isolated_store.records(page=1, page_size=10)["records"]
+    assert len(records) == 1
+    assert records[0]["model"] == "deepseek-ai/deepseek-v4.1-flash"
+
+
+def test_openai_chat_records_resolved_model(monkeypatch, isolated_store):
+    """OpenAI path records the alias-resolved model (falls back to default)."""
+    monkeypatch.setattr(routes_mod.settings, "proxy_api_token", "")
+    monkeypatch.setattr(routes_mod.settings, "nim_default_model", "deepseek-ai/deepseek-v4.1-flash")
+    _fake_execute(content="olá")
+    c = TestClient(app)
+    r = c.post("/v1/chat/completions", json={
+        "model": "some-client-model",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": False,
+    })
+    assert r.status_code == 200
+    records = isolated_store.records(page=1, page_size=10)["records"]
+    assert len(records) == 1
+    assert records[0]["model"] == "deepseek-ai/deepseek-v4.1-flash"
+
+
+def test_openai_chat_full_model_id_forwarded_as_is(monkeypatch, isolated_store):
+    """OpenAI path passes full provider/model ids through unchanged."""
+    monkeypatch.setattr(routes_mod.settings, "proxy_api_token", "")
+    monkeypatch.setattr(routes_mod.settings, "nim_default_model", "nvidia/nemotron-3-super-120b-a12b")
+    _fake_execute(content="ok")
+    c = TestClient(app)
+    r = c.post("/v1/chat/completions", json={
+        "model": "deepseek-ai/deepseek-v4-flash-0731",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": False,
+    })
+    assert r.status_code == 200
+    records = isolated_store.records(page=1, page_size=10)["records"]
+    assert len(records) == 1
+    assert records[0]["model"] == "deepseek-ai/deepseek-v4-flash-0731"

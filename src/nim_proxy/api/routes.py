@@ -555,12 +555,12 @@ async def _handle_web_tools_request(req: MessagesRequest, request_id: str, start
     message = openai_final_to_anthropic_message(final, routed.resolved.original_model)
     inp, out = _usage_from_message(message)
     if req.stream:
-        _record_request("/v1/messages", req.model, True, "success", 200, start_time, inp, out)
+        _record_request("/v1/messages", routed.request.model, True, "success", 200, start_time, inp, out)
         return ManagedStreamingResponse(
             stream_message_as_anthropic_sse(message),
             request_id=request_id,
         )
-    _record_request("/v1/messages", req.model, False, "success", 200, start_time, inp, out)
+    _record_request("/v1/messages", routed.request.model, False, "success", 200, start_time, inp, out)
     return JSONResponse(content=message)
 
 
@@ -576,15 +576,12 @@ async def handle_anthropic_messages(req: MessagesRequest):
     request_id = f"msg_{uuid.uuid4().hex[:24]}"
     start_time = time.perf_counter()
     requested_model = req.model
+    resolved_model = req.model
     stream_flag = bool(req.stream)
     lg = logger.bind(request_id=request_id)
-    lg.info(
-        "REQ model={} stream={} msg_count={} tools={} max_tokens={}",
-        req.model, req.stream, len(req.messages), len(req.tools or []), req.max_tokens,
-    )
     try:
         if not req.messages:
-            _record_request("/v1/messages", requested_model, stream_flag, "error", 400, start_time, error="empty messages")
+            _record_request("/v1/messages", resolved_model, stream_flag, "error", 400, start_time, error="empty messages")
             return _error_response(
                 400, "invalid_request_error", "messages: at least one message is required", request_id
             )
@@ -595,6 +592,11 @@ async def handle_anthropic_messages(req: MessagesRequest):
             return await _handle_web_tools_request(req, request_id, start_time)
 
         routed = _model_router.resolve_messages_request(req)
+        resolved_model = routed.request.model
+        lg.info(
+            "REQ model={} resolved={} stream={} msg_count={} tools={} max_tokens={}",
+            requested_model, resolved_model, req.stream, len(req.messages), len(req.tools or []), req.max_tokens,
+        )
 
         # Safety classifier: Claude Code's auto-mode safety prompt should never
         # consume reasoning budget — it's a simple yes/no classification.
@@ -611,12 +613,12 @@ async def handle_anthropic_messages(req: MessagesRequest):
             opt_in = int(getattr(optimized_usage, "input_tokens", 0) or 0)
             opt_out = int(getattr(optimized_usage, "output_tokens", 0) or 0)
             if req.stream:
-                _record_request("/v1/messages", requested_model, True, "success", 200, start_time, opt_in, opt_out)
+                _record_request("/v1/messages", resolved_model, True, "success", 200, start_time, opt_in, opt_out)
                 return ManagedStreamingResponse(
                     _stream_optimized_response(optimized),
                     request_id=request_id,
                 )
-            _record_request("/v1/messages", requested_model, False, "success", 200, start_time, opt_in, opt_out)
+            _record_request("/v1/messages", resolved_model, False, "success", 200, start_time, opt_in, opt_out)
             return JSONResponse(content=cast(dict, optimized.model_dump()))
 
         stream = _new_executor().stream(
@@ -634,21 +636,21 @@ async def handle_anthropic_messages(req: MessagesRequest):
                 message, error = await aggregate_anthropic_sse_to_message(stream)
             except ExecutionFailure as exc:
                 _record_request(
-                    "/v1/messages", requested_model, False, "error",
+                    "/v1/messages", resolved_model, False, "error",
                     getattr(exc, "status_code", 500) or 500, start_time,
                     error=str(getattr(exc, "message", "") or type(exc).__name__),
                 )
                 return _failure_response(exc, request_id)
             except Exception as exc:
-                _record_request("/v1/messages", requested_model, False, "error", 500, start_time, error=type(exc).__name__)
+                _record_request("/v1/messages", resolved_model, False, "error", 500, start_time, error=type(exc).__name__)
                 return _exception_response(exc, request_id, "CREATE_MESSAGE_NON_STREAM_ERROR")
             if error is not None:
                 error_type, message_text = _stream_error_fields(error)
                 status_code = anthropic_status_for_error_type(error_type)
-                _record_request("/v1/messages", requested_model, False, "error", status_code, start_time, error=error_type)
+                _record_request("/v1/messages", resolved_model, False, "error", status_code, start_time, error=error_type)
                 return _error_response(status_code, error_type, message_text, request_id)
             inp, out = _usage_from_message(message)
-            _record_request("/v1/messages", requested_model, False, "success", 200, start_time, inp, out)
+            _record_request("/v1/messages", resolved_model, False, "success", 200, start_time, inp, out)
             return JSONResponse(content=message)
 
         # Streaming: surface failures that happen before the first byte as
@@ -660,14 +662,14 @@ async def handle_anthropic_messages(req: MessagesRequest):
                 stream, owner="routes", source="api",
                 preserved_error=EmptyStreamError("Upstream provider returned an empty stream."),
             )
-            _record_request("/v1/messages", requested_model, True, "error", 500, start_time, error="empty stream")
+            _record_request("/v1/messages", resolved_model, True, "error", 500, start_time, error="empty stream")
             return _error_response(500, "api_error", "Upstream provider returned an empty stream.", request_id)
         except ExecutionFailure as exc:
             await close_stream_input(
                 stream, owner="routes", source="api", preserved_error=exc,
             )
             _record_request(
-                "/v1/messages", requested_model, True, "error",
+                "/v1/messages", resolved_model, True, "error",
                 getattr(exc, "status_code", 500) or 500, start_time,
                 error=str(getattr(exc, "message", "") or type(exc).__name__),
             )
@@ -676,7 +678,7 @@ async def handle_anthropic_messages(req: MessagesRequest):
             await close_stream_input(
                 stream, owner="routes", source="api", preserved_error=exc,
             )
-            _record_request("/v1/messages", requested_model, True, "error", 500, start_time, error=type(exc).__name__)
+            _record_request("/v1/messages", resolved_model, True, "error", 500, start_time, error=type(exc).__name__)
             return _exception_response(exc, request_id, "CREATE_MESSAGE_STREAM_START_ERROR")
 
         async def body():
@@ -685,24 +687,24 @@ async def handle_anthropic_messages(req: MessagesRequest):
                 yield chunk
 
         return ManagedStreamingResponse(
-            _recorded_stream(body(), endpoint="/v1/messages", model=requested_model),
+            _recorded_stream(body(), endpoint="/v1/messages", model=resolved_model),
             request_id=request_id,
         )
 
     except ApplicationError as exc:
         status_code = getattr(exc, "status_code", 400)
-        _record_request("/v1/messages", requested_model, stream_flag, "error", status_code, start_time, error=str(exc))
+        _record_request("/v1/messages", resolved_model, stream_flag, "error", status_code, start_time, error=str(exc))
         error_type = "invalid_request_error" if status_code == 400 else "api_error"
         return _error_response(status_code, error_type, str(exc), request_id)
     except ExecutionFailure as exc:
         _record_request(
-            "/v1/messages", requested_model, stream_flag, "error",
+            "/v1/messages", resolved_model, stream_flag, "error",
             getattr(exc, "status_code", 500) or 500, start_time,
             error=str(getattr(exc, "message", "") or type(exc).__name__),
         )
         return _failure_response(exc, request_id)
     except Exception as exc:
-        _record_request("/v1/messages", requested_model, stream_flag, "error", 500, start_time, error=type(exc).__name__)
+        _record_request("/v1/messages", resolved_model, stream_flag, "error", 500, start_time, error=type(exc).__name__)
         return _exception_response(exc, request_id, "CREATE_MESSAGE_ERROR")
 
 
@@ -738,6 +740,7 @@ async def handle_openai_chat(request: Request):
     endpoint = request.url.path
     start_time = time.perf_counter()
     model_name: str = ""
+    resolved_model: str = ""
     stream: bool = False
     try:
         body = await request.json()
@@ -749,7 +752,8 @@ async def handle_openai_chat(request: Request):
         else:
             model_name = body.get("model", settings.nim_default_model)
 
-        body["model"] = settings.get_model_for_alias(model_name)
+        resolved_model = settings.get_model_for_alias(model_name)
+        body["model"] = resolved_model
 
         resolved_reasoning = settings.get_reasoning_for_model(model_name)
         if resolved_reasoning.enabled and resolved_reasoning.budget_tokens:
@@ -766,11 +770,11 @@ async def handle_openai_chat(request: Request):
             try:
                 res = await _client.execute_chat(body)
             except Exception as exc:
-                _record_request(endpoint, model_name, True, "error", 500, start_time, error=type(exc).__name__)
+                _record_request(endpoint, resolved_model, True, "error", 500, start_time, error=type(exc).__name__)
                 return _exception_response(exc, f"msg_{uuid.uuid4().hex[:24]}", "OPENAI_CHAT_STREAM")
             # Record when the stream actually finishes, not when it starts.
             return _recorded_openai_stream(
-                res, endpoint=endpoint, model=model_name, start_time=start_time
+                res, endpoint=endpoint, model=resolved_model, start_time=start_time
             )
 
         # Non-streaming: resolve local web tools through the admission-controlled provider
@@ -783,12 +787,12 @@ async def handle_openai_chat(request: Request):
         usage = getattr(oai_response, "usage", None)
         inp = int(getattr(usage, "prompt_tokens", 0) or 0)
         out = int(getattr(usage, "completion_tokens", 0) or 0)
-        _record_request(endpoint, model_name, False, "success", 200, start_time, inp, out)
+        _record_request(endpoint, resolved_model, False, "success", 200, start_time, inp, out)
         if is_responses:
             from nim_proxy.core.openai import openai_response_to_responses
             return openai_response_to_responses(oai_response, model_name)
         return oai_response
     except Exception as err:
-        _record_request(endpoint, model_name, stream, "error", 500, start_time, error=type(err).__name__)
+        _record_request(endpoint, resolved_model or model_name, stream, "error", 500, start_time, error=type(err).__name__)
         logger.error(f"Error handling OpenAI chat completions: {err}")
         return _error_response(500, "api_error", str(err), f"msg_{uuid.uuid4().hex[:24]}")
